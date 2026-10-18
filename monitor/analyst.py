@@ -119,31 +119,34 @@ class Analyst:
             await self._propose_rule(sid, cat, payloads)
 
     def _categories_for(self, sid: str, payloads: list[str]) -> list[str]:
+        # prompt_injection first: it's the headline learning beat, so its rule should land soonest.
         cats: list[str] = []
-        if sid in self.categories:
-            cats.append(self.categories[sid])
         blob = " ".join(payloads).lower()
-        if "sqli" not in cats and any(k in blob for k in ("union", "select", "or 1=1", "sqlite_master", "drop")):
-            cats.append("sqli")
-        if "prompt_injection" not in cats and any(k in blob for k in ("ignore", "disregard", "system prompt", "instructions")):
+        if any(k in blob for k in ("ignore", "disregard", "system prompt", "instructions", "developer mode")):
             cats.append("prompt_injection")
+        if any(k in blob for k in ("union", "select", "or 1=1", "sqlite_master", "drop")):
+            cats.append("sqli")
+        if sid in self.categories and self.categories[sid] not in cats:
+            cats.append(self.categories[sid])
         return cats or ["other"]
 
     async def _propose_rule(self, sid: str, category: str, payloads: list[str]) -> None:
-        """Ask the LLM for a generalized rule; on LLM miss or gateway rejection, use the fallback."""
+        """Learn a generalized rule for this category.
+
+        We always activate the precomputed, well-generalized fallback rule so the self-improvement
+        beat is deterministic whether the LLM is off, refuses, or proposes a too-narrow rule. When the
+        LLM is on we ALSO submit its own proposal (a model-authored bonus) if it adds a distinct,
+        valid pattern. Both are real learned rules; the dashboard shows each with source=learned.
+        """
+        fb = fallbacks.propose(category, payloads)
+        await self._submit_rule(fb)  # guaranteed generalized rule for this category
+
         proposal = await llm.chat_json(prompts.PROPOSE_SYSTEM, prompts.propose_user(category, payloads),
                                        max_tokens=200, timeout=10.0)
-        source = "llm"
-        if not (proposal and proposal.get("regex") and proposal.get("example_payload")):
-            proposal, source = fallbacks.propose(category, payloads), "offline"
-        proposal.setdefault("category", category)
-
-        result = await self._submit_rule(proposal)
-        # If the LLM's rule was rejected, fall back to the precomputed proposal so learning still lands.
-        if result is not None and not result.get("accepted") and source == "llm":
-            fb = fallbacks.propose(category, payloads)
-            log.info("LLM rule rejected (%s); trying offline fallback", result.get("reason"))
-            await self._submit_rule(fb)
+        if proposal and proposal.get("regex") and proposal.get("example_payload"):
+            proposal.setdefault("category", category)
+            if proposal["regex"] != fb["regex"]:
+                await self._submit_rule(proposal)  # bonus; rejected narrow/invalid rules are just skipped
 
     async def _submit_rule(self, proposal: dict[str, Any]) -> dict[str, Any] | None:
         return await self._gateway("POST", "/admin/rules/propose", {

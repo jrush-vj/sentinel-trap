@@ -83,10 +83,10 @@ pause
 
 # ---- Stage 5: mutated variant caught by the LEARNED rule ----
 hdr "Stage 5 · Mutated variant caught by a LEARNED rule (self-improvement)"
-echo "  Waiting for the learned rule to activate…"
+echo "  Waiting for the learned prompt-injection rule to activate…"
 LEARNED=""
-for i in $(seq 1 30); do
-  LEARNED=$(curl -s "$MON/api/rules" | python -c "import sys,json;print(next((r['id'] for r in json.load(sys.stdin) if r.get('source')=='learned'),''))" 2>/dev/null)
+for i in $(seq 1 40); do
+  LEARNED=$(curl -s "$MON/api/rules" | python -c "import sys,json;print(next((r['id'] for r in json.load(sys.stdin) if r.get('source')=='learned' and r.get('category')=='prompt_injection'),''))" 2>/dev/null)
   [[ -n "$LEARNED" ]] && break; sleep 1
 done
 echo "  learned rule active: ${GRN}${LEARNED:-<none yet>}${RST}"

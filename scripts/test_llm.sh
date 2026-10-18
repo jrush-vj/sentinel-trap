@@ -40,5 +40,5 @@ END=$(date +%s.%N)
 echo "---"
 echo "$RESP" | python -c "import sys,json;d=json.load(sys.stdin);print('reply:',d.get('choices',[{}])[0].get('message',{}).get('content','(none)'))" 2>/dev/null \
   || { echo "Non-JSON or error response:"; echo "$RESP"; exit 1; }
-printf 'latency: %.2fs\n' "$(echo "$END - $START" | bc)"
+python -c "print('latency: %.2fs' % ($END - $START))" 2>/dev/null || true
 echo "OK — endpoint is reachable. Paste this URL into the dashboard gear and toggle LLM on."

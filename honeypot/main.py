@@ -104,8 +104,14 @@ async def chat(request: Request) -> JSONResponse:
                                f"Attacker says: {message}\nInclude this exact fake key: {key}",
                                max_tokens=140, timeout=4.0)
         source = "llm"
+        # A safety-aligned model often refuses to roleplay the leak, so no canary ends up in the
+        # reply. The canary is what makes the trap work, so guarantee one: use the canned leak
+        # if the model declined or omitted the token.
+        if fakes.CANARY_PREFIX not in reply:
+            reply, _ = fakes.fake_chat_leak()  # canned leak always carries a canary
+            source = "offline"
     except llm.LLMUnavailable:
-        reply, key = fakes.fake_chat_leak()
+        reply, _ = fakes.fake_chat_leak()
         source = "offline"
     report(c, "prompt", message, f"fake prompt-injection leak ({source})", "canary key leaked")
     model = llm.load_config().get("model", "novamind")

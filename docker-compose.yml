@@ -53,6 +53,7 @@ services:
       PYTHONPATH: /srv
     volumes:
       - ./tests:/srv/tests:ro
+      - ./honeypot:/srv/honeypot:ro   # honeypot.fakes is pure-stdlib; tests cover its contract
     working_dir: /srv
     command: ["python", "-m", "pytest", "-q", "tests"]
     networks: [st-net]
