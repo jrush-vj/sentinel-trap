@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SENTINEL-TRAP — Adaptive AI Security Gateway</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%9B%A1%EF%B8%8F%3C/text%3E%3C/svg%3E" />
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+<!-- ============ TOP BAR ============ -->
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">🛡️</span>
+    <div>
+      <h1>SENTINEL-TRAP</h1>
+      <p class="tagline">Adaptive AI security gateway · memory &amp; self-correction</p>
+    </div>
+  </div>
+  <div class="counters" id="counters">
+    <div class="counter"><span class="num" id="c-requests">0</span><span class="lbl">Requests</span></div>
+    <div class="counter attack"><span class="num" id="c-attacks">0</span><span class="lbl">Attacks detected</span></div>
+    <div class="counter trap"><span class="num" id="c-trapped">0</span><span class="lbl">Trapped</span></div>
+    <div class="counter ban"><span class="num" id="c-banned">0</span><span class="lbl">Banned</span></div>
+    <div class="counter learn"><span class="num" id="c-rules">0</span><span class="lbl">Rules learned</span></div>
+    <div class="counter fix"><span class="num" id="c-fixed">0</span><span class="lbl">False pos. fixed</span></div>
+  </div>
+  <div class="top-actions">
+    <button class="chip" id="llm-chip" title="LLM analyst status — click to configure">
+      <span class="dot" id="llm-dot"></span><span id="llm-chip-text">analyst…</span>
+    </button>
+    <button class="btn ghost" id="gear-btn" title="LLM settings">⚙</button>
+    <button class="btn danger" id="reset-btn" title="Clear all demo state">⟲ Reset</button>
+  </div>
+</header>
+
+<!-- ============ GRID ============ -->
+<main class="grid">
+  <!-- flow diagram -->
+  <section class="panel flow" id="panel-flow">
+    <h2>ATTACK FLOW</h2>
+    <div id="flow-svg"></div>
+    <div class="legit-split">
+      <div class="split legit"><span class="tag">LEGIT</span><span id="split-legit">—</span></div>
+      <div class="split attacker"><span class="tag">ATTACKER</span><span id="split-attacker">—</span></div>
+    </div>
+  </section>
+
+  <!-- live feed -->
+  <section class="panel feed" id="panel-feed">
+    <h2>LIVE EVENT FEED <span class="hint" id="ws-state">connecting…</span></h2>
+    <ul id="feed"></ul>
+  </section>
+
+  <!-- honeypot activity -->
+  <section class="panel honeypot" id="panel-honeypot">
+    <h2>HONEYPOT ACTIVITY</h2>
+    <div id="sessions" class="sessions"></div>
+    <p class="empty" id="sessions-empty">No trapped attackers yet.</p>
+  </section>
+
+  <!-- analyst -->
+  <section class="panel analyst" id="panel-analyst">
+    <h2>AI ANALYST <span class="src-tag" id="analyst-src">—</span></h2>
+    <div id="analyst-stream" class="terminal"></div>
+    <div id="report-card" class="report hidden"></div>
+  </section>
+
+  <!-- memory & learning -->
+  <section class="panel memory" id="panel-memory">
+    <h2>MEMORY &amp; LEARNING</h2>
+    <h3>Banned attackers <span class="hint">(memory)</span></h3>
+    <table class="tbl"><thead><tr><th>Fingerprint</th><th>IP</th><th>Reason</th><th></th></tr></thead>
+      <tbody id="bans-body"></tbody></table>
+    <h3>Learned rules <span class="hint">(self-improvement)</span></h3>
+    <table class="tbl"><thead><tr><th>ID</th><th>Cat</th><th>Pattern</th><th>Hits</th><th>On</th></tr></thead>
+      <tbody id="rules-body"></tbody></table>
+    <div id="beforeafter" class="beforeafter hidden">
+      <span class="ba-before">BEFORE · built-in score 0 → would reach app</span>
+      <span class="ba-arrow">→</span>
+      <span class="ba-after" id="ba-after">AFTER · learned rule caught the variant</span>
+    </div>
+  </section>
+</main>
+
+<!-- ============ LLM SETTINGS POPOVER ============ -->
+<div class="modal-backdrop hidden" id="gear-modal">
+  <div class="modal">
+    <h2>LLM analyst settings</h2>
+    <p class="muted">Paste your Kaggle tunnel URL. It changes every notebook restart — no container restart needed.</p>
+    <label>Base URL <input id="f-url" placeholder="https://xxxx.trycloudflare.com  (/v1 optional)" /></label>
+    <label>API key <input id="f-key" type="password" placeholder="leave blank to keep current" /></label>
+    <label>Model name <input id="f-model" placeholder="qwen3.6-35b-a3b" /></label>
+    <label class="row"><input id="f-enabled" type="checkbox" /> Enable LLM analyst (off = offline analyst)</label>
+    <label>Admin token <input id="f-token" type="password" placeholder="dev-admin-token" /></label>
+    <div class="modal-actions">
+      <button class="btn" id="f-test">Test connection</button>
+      <button class="btn primary" id="f-save">Save</button>
+      <button class="btn ghost" id="f-cancel">Close</button>
+    </div>
+    <pre id="f-result" class="result"></pre>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
