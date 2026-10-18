@@ -93,7 +93,7 @@ function typeLine(el, text, done) {
     else { el.classList.remove("cursor"); if (done) done(); }
   })();
 }
-function addCommentary(a) {
+function addCommentary(a, instant) {
   setAnalystSource(a.source);
   const div = document.createElement("div");
   div.className = "cmt";
@@ -101,14 +101,15 @@ function addCommentary(a) {
   line.className = "line";
   div.appendChild(line);
   const tags = document.createElement("div");
-  tags.className = "tags hidden";
+  tags.className = "tags" + (instant ? "" : " hidden");
   tags.innerHTML = `${a.intent ? `<span class="pill2 intent">${esc(a.intent)}</span>` : ""}
     ${a.technique ? `<span class="pill2">${esc(a.technique)}</span>` : ""}
     ${a.mitre ? `<span class="pill2 mitre">${esc(a.mitre)}</span>` : ""}
     <span class="rmeter"><i style="width:${(a.risk || 0) * 10}%"></i></span>`;
   div.appendChild(tags);
   stream.prepend(div);
-  typeLine(line, a.commentary || "(no commentary)", () => tags.classList.remove("hidden"));
+  if (instant) line.textContent = a.commentary || "(no commentary)";
+  else typeLine(line, a.commentary || "(no commentary)", () => tags.classList.remove("hidden"));
   while (stream.children.length > 30) stream.lastChild.remove();
 }
 function setAnalystSource(src) {
@@ -278,9 +279,18 @@ function refreshAll() { refreshStats(); refreshSessions(); refreshMemory(); refr
 
 /* ---------- boot ---------- */
 $("flow-svg").innerHTML = FLOW;
+async function loadAnalyses() {
+  const items = await api("/api/analyses?limit=40").catch(() => []);
+  // oldest first so prepend() leaves newest on top, matching live order; instant (no typewriter)
+  items.reverse().forEach((a) => {
+    if (a.kind === "commentary") addCommentary(a, true);
+    else if (a.kind === "report") showReport(a);
+  });
+}
 (async function boot() {
   const evs = await api("/api/events?limit=80").catch(() => []);
   evs.reverse().forEach(addFeed);
+  await loadAnalyses();
   refreshAll();
   connectWS();
   setInterval(refreshLLM, 5000);

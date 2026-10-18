@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from monitor import db
+from monitor.analyst import Analyst
 from monitor.hub import hub
 from monitor.mock import MockRunner
 from shared import llm
@@ -30,10 +31,14 @@ app = FastAPI(title="SENTINEL-TRAP monitor", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
+analyst = Analyst(hub.broadcast, GATEWAY_URL, ADMIN_TOKEN)
+
+
 async def ingest(event: dict[str, Any]) -> None:
-    """Store, broadcast and (later) hand to the analyst. Shared by POST /events and the mock runner."""
+    """Store, broadcast, and hand to the analyst. Shared by POST /events and the mock runner."""
     db.insert_event(event)
     await hub.broadcast({"type": "event", "event": event})
+    analyst.handle(event)  # async commentary/report/learning (never blocks the request path)
 
 
 mock = MockRunner(ingest)
@@ -88,6 +93,12 @@ async def ws(websocket: WebSocket) -> None:
 @app.get("/api/events")
 async def api_events(limit: int = 200, action: str | None = None) -> list[dict[str, Any]]:
     return db.recent_events(min(limit, 1000), action)
+
+
+@app.get("/api/analyses")
+async def api_analyses(limit: int = 60) -> list[dict[str, Any]]:
+    """Recent analyst output (commentary + reports) so a late-loading dashboard isn't blank."""
+    return db.recent_analyses(min(limit, 200))
 
 
 def build_sessions(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -178,6 +189,7 @@ async def api_reset() -> dict[str, Any]:
     except Exception as exc:
         log.warning("gateway reset failed: %s", exc)
     db.reset()
+    analyst.reset()
     await hub.broadcast({"type": "reset"})
     return {"ok": True, "gateway": gateway_result}
 
