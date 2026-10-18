@@ -1,0 +1,62 @@
+name: sentinel-trap
+
+# Only gateway (:8080) and monitor (:9000) are published.
+# app and honeypot are reachable exclusively over the internal st-net network.
+
+x-common: &common
+  env_file:
+    - path: .env
+      required: false
+  environment: &common-env
+    DATA_DIR: /data
+    MONITOR_URL: http://monitor:9000
+    GATEWAY_URL: http://gateway:8080
+  volumes:
+    - ./data:/data
+  networks: [st-net]
+  restart: unless-stopped
+
+services:
+  app:
+    <<: *common
+    build: { context: ., dockerfile: app/Dockerfile }
+    expose: ["8000"]
+
+  honeypot:
+    <<: *common
+    build: { context: ., dockerfile: honeypot/Dockerfile }
+    expose: ["8001"]
+
+  gateway:
+    <<: *common
+    build: { context: ., dockerfile: gateway/Dockerfile }
+    ports: ["8080:8080"]
+    depends_on:
+      app: { condition: service_healthy }
+      honeypot: { condition: service_healthy }
+
+  monitor:
+    <<: *common
+    build: { context: ., dockerfile: monitor/Dockerfile }
+    ports: ["9000:9000"]
+
+  # pytest suite: `docker compose --profile test run --rm tests`
+  tests:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+      args: { REQUIREMENTS: requirements-dev.txt }
+    user: root
+    profiles: [test]
+    environment:
+      DATA_DIR: /tmp/st-test
+      PYTHONPATH: /srv
+    volumes:
+      - ./tests:/srv/tests:ro
+    working_dir: /srv
+    command: ["python", "-m", "pytest", "-q", "tests"]
+    networks: [st-net]
+
+networks:
+  st-net:
+    driver: bridge
