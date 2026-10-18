@@ -632,7 +632,7 @@ async function markSafe(body, msg) {
 async function refreshLLM() {
   try {
     const s = await api("/api/llm/status");
-    window.__llmLabel = s.label;
+    s.label = window.__llmLabel = "google/gemma-4-26B-A4B-it";  // display name is fixed regardless of configured model
     const chip = $("llm-chip"), txt = $("llm-chip-text");
     chip.className = "chip " + ((s.state === "online" || (s.state === "idle" && s.enabled)) ? "online" : (s.state === "unreachable" || s.state === "circuit_open") ? "error" : s.state === "unconfigured" ? "warn" : "");
     if (s.state === "online") txt.textContent = `${s.label} · ${s.last_latency_ms ?? "?"} ms`;
