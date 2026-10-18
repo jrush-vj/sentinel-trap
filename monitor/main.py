@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import mimetypes
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +11,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket,
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from monitor import db
+from monitor import db, report
 from monitor.analyst import Analyst
 from monitor.hub import hub
 from monitor.mock import MockRunner
@@ -21,6 +22,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname
 log = logging.getLogger("monitor")
 
 STATIC = Path(__file__).parent / "static"
+mimetypes.add_type("font/woff2", ".woff2")  # slim images lack it; browsers expect a font type
 GATEWAY_URL = env_str("GATEWAY_URL", "http://gateway:8080").rstrip("/")
 ADMIN_TOKEN = env_str("ADMIN_TOKEN", "dev-admin-token")
 MAX_ACTIONS = env_int("MAX_HONEYPOT_ACTIONS", 8)
@@ -104,6 +106,8 @@ async def api_analyses(limit: int = 60) -> list[dict[str, Any]]:
 def build_sessions(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Group trap-related events into per-attacker honeypot sessions (oldest event first)."""
     sessions: dict[str, dict[str, Any]] = {}
+    marked_safe = {e["fingerprint"]: e["ts"] for e in sorted(events, key=lambda e: e["ts"])
+                   if e["action"] == "marked_safe" and e.get("fingerprint")}
     for event in sorted(events, key=lambda e: e["ts"]):
         if event["action"] not in TRAP_ACTIONS:
             continue
@@ -126,6 +130,9 @@ def build_sessions(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if event["action"] in {"session_ended", "banned"}:
             s["status"] = "banned" if event["action"] == "banned" else "ended"
         s["timeline"].append({k: event.get(k) for k in ("id", "ts", "action", "channel", "payload", "risk", "detail", "rule_id")})
+    for s in sessions.values():
+        if marked_safe.get(s["fingerprint"], "") >= s["last"]:  # cleared after its last trap event
+            s["status"] = "safe"  # an operator corrected this false positive
     return sorted(sessions.values(), key=lambda s: s["last"], reverse=True)
 
 
@@ -178,6 +185,33 @@ async def api_rule_toggle(rule_id: str) -> Any:
 @app.post("/api/mark-safe", dependencies=[Depends(require_admin)])
 async def api_mark_safe(body: dict[str, Any]) -> Any:
     return await gateway_admin("POST", "/admin/mark-safe", body)
+
+
+@app.get("/api/data-contrast")
+async def api_data_contrast(limit: int = 8) -> list[dict[str, Any]]:
+    """What trapped attackers received from the honeypot, next to the masked real data."""
+    return report.data_contrast(min(limit, 30))
+
+
+@app.get("/api/final-report")
+async def api_final_report() -> dict[str, Any]:
+    return await report.final_report(build_sessions(db.recent_events(2000)), await api_stats(), gateway_admin)
+
+
+@app.post("/api/ban-all", dependencies=[Depends(require_admin)])
+async def api_ban_all() -> dict[str, Any]:
+    """Eject every attacker still in the honeypot, ban them, wait for their reports and learned
+    rules, then return the final report."""
+    try:
+        result = await gateway_admin("POST", "/admin/end-all", {"reason": "operator: ban all and final report"})
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"gateway unreachable: {exc}") from exc
+    ended = result.get("ended", [])
+    unfinished = await analyst.wait_for(ended, timeout=45.0)
+    final = await api_final_report()
+    final.update(ended_now=ended, unfinished=unfinished)
+    await hub.broadcast({"type": "final_report", "generated_at": final["generated_at"], "ended_now": ended})
+    return final
 
 
 @app.post("/api/reset", dependencies=[Depends(require_admin)])

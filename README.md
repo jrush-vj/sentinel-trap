@@ -72,8 +72,13 @@ Click **Reset** on the dashboard (or `POST /api/reset`) to re-run cleanly before
      **learned a generalized rule** from the earlier session, so it's caught now:
      **`learned_rule_caught`** lights up, and the before/after strip appears. That's **self-improvement**.
    - **Stage 6 — Self-correction.** A benign user asks *"Can you show me how to reset my password?"* —
-     a deliberately over-eager rule flags it. Click **MARK AS SAFE** on the dashboard. Re-ask: it now
-     **passes to the real app**. That's **self-correction**.
+     a deliberately over-eager rule flags it. Click **Mark as safe** on their card in Honeypot activity
+     (optionally also turning off the rule that flagged it). Re-ask: it now **passes to the real app**.
+     That's **self-correction**.
+   - **Finale — Ban all hackers & final report.** The top-right button ejects and bans everyone still in
+     the honeypot, waits for the analyst's reports and learned rules, then opens a final report: what each
+     attacker did, the analyst's conclusion, and proof they're stopped next time (banned identity, plus
+     how many of their own requests the rules, including learned ones, now catch). Download it as JSON or print it.
 3. **(Optional) Turn the LLM on** (gear icon → paste your tunnel URL → Test → Save). The analyst label
    flips to e.g. *"Qwen3.6-35B-A3B live"* and commentary becomes model-written. Everything else is
    identical — proving the LLM is an analyst, not a gatekeeper.
@@ -92,6 +97,18 @@ Click **Reset** on the dashboard (or `POST /api/reset`) to re-run cleanly before
 > never decides allow/block — so the defense is fast and safe, and the AI makes it *adaptive*.
 
 ---
+
+### The dashboard
+
+- **Request flow** — an animated diagram (User → Gateway → Service database / Honeypot database →
+  Honeypot LLM sandbox → Decision layer → keep trapping or ban). Each live event sends a dot along its path.
+- **Honeypot activity** — one card per trapped attacker, plus the analyst's notes and session reports.
+- **Live event feed** — every event, filterable (All / Attacks / Legit).
+- **Real data vs what the hacker got** — the fake rows each attacker received next to the real rows,
+  masked (only the first characters of real values are ever shown). Canary tokens are highlighted.
+- **Memory & learned attacks** — bans (with Mark safe), learned rules (on/off), and the before/after strip.
+
+Press **P** for bigger type on a projector.
 
 ## Configuring the LLM (optional)
 

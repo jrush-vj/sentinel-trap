@@ -13,6 +13,7 @@ import asyncio
 import logging
 import random
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
@@ -52,12 +53,23 @@ def ctx(request: Request) -> dict[str, str]:
     }
 
 
-def report(c: dict[str, str], channel: str, payload: str, detail: str, served: str = "") -> None:
+def report(c: dict[str, str], channel: str, payload: str, detail: str, served: str = "",
+           kind: str = "", sample: Any = None) -> None:
+    """kind = which real table the fake stands in for; sample = a few of the fake values actually served
+    (shown on the dashboard next to the masked real data)."""
+    extra = {"served": served, "actions": int(c["actions"] or 0), "max_actions": MAX_ACTIONS}
+    if kind:
+        extra.update(kind=kind, sample=sample)
     sender.emit(make_event(
         "honeypot_interaction", session_id=c["session"], fingerprint=c["fp"], attacker_ip=c["ip"],
-        channel=channel, payload=payload, verdict="malicious", risk=8,
-        detail=detail, extra={"served": served, "actions": int(c["actions"] or 0), "max_actions": MAX_ACTIONS},
+        channel=channel, payload=payload, verdict="malicious", risk=8, detail=detail, extra=extra,
     ))
+
+
+def sample_rows(rows: list[dict]) -> list[dict]:
+    """The most telling fake rows (keys, secrets, tables first), trimmed for the event log."""
+    telling = [r for r in rows if r.get("plan") in ("api_key", "secret", "table")] or rows
+    return [{k: str(v)[:60] for k, v in r.items()} for r in telling[:6]]
 
 
 @app.get("/healthz")
@@ -79,7 +91,9 @@ async def customers(request: Request, search: str = "") -> JSONResponse:
     c = ctx(request)
     result = fakes.fake_customer_response(search)
     served = result.pop("_served", "")
-    report(c, "web", f"/api/customers?search={search}", f"served fake data: {served}", served)
+    kind = result.pop("_kind", "customers")
+    report(c, "web", f"/api/customers?search={search}", f"served fake data: {served}", served,
+           kind=kind, sample=sample_rows(result["results"]))
     return JSONResponse(result)
 
 
@@ -113,7 +127,8 @@ async def chat(request: Request) -> JSONResponse:
     except llm.LLMUnavailable:
         reply, _ = fakes.fake_chat_leak()
         source = "offline"
-    report(c, "prompt", message, f"fake prompt-injection leak ({source})", "canary key leaked")
+    report(c, "prompt", message, f"fake prompt-injection leak ({source})", "canary key leaked",
+           kind="prompt", sample=reply[:300])
     model = llm.load_config().get("model", "novamind")
     return JSONResponse({"reply": reply, "model": model, "source": source})
 
@@ -130,8 +145,11 @@ async def robots(request: Request) -> PlainTextResponse:
 async def dotenv(request: Request) -> PlainTextResponse:
     await jitter()
     key = fakes.canary_token("env")
-    report(ctx(request), "web", "/.env", "served decoy .env with canary", "canary in .env")
-    return PlainTextResponse(f"DATABASE_URL=postgres://nova:Sup3r$ecretDB!@db/nova\nINTERNAL_API_KEY={key}\nDEBUG=false\n")
+    body = f"DATABASE_URL=postgres://nova:Sup3r$ecretDB!@db/nova\nINTERNAL_API_KEY={key}\nDEBUG=false\n"
+    report(ctx(request), "web", "/.env", "served decoy .env with canary", "canary in .env",
+           kind="secrets", sample=[{"name": line.split("=", 1)[0], "email": line.split("=", 1)[1]}
+                                   for line in body.strip().splitlines()])
+    return PlainTextResponse(body)
 
 
 @app.get("/admin")
@@ -146,7 +164,8 @@ async def internal_keys(request: Request) -> JSONResponse:
     await jitter()
     rows = [{"owner": "billing-service", "key": fakes.canary_token("ik1")},
             {"owner": "root-admin", "key": fakes.canary_token("ik2")}]
-    report(ctx(request), "web", "/api/internal/keys", "served fake internal keys with canaries", "canary keys")
+    report(ctx(request), "web", "/api/internal/keys", "served fake internal keys with canaries", "canary keys",
+           kind="api_keys", sample=[{"name": r["owner"], "email": r["key"]} for r in rows])
     return JSONResponse({"keys": rows})
 
 

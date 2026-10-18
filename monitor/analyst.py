@@ -167,6 +167,24 @@ class Analyst:
             log.warning("gateway call %s %s failed: %s", method, path, exc)
             return None
 
+    async def wait_for(self, session_ids: list[str], timeout: float) -> list[str]:
+        """Wait until each session's end (ban, report, learning) has been processed.
+        Returns the session ids that were still unfinished when the timeout hit."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        pending = list(session_ids)
+        while pending and loop.time() < deadline:
+            sid = pending[0]
+            if sid in self.ended and sid in self.queues:
+                try:
+                    await asyncio.wait_for(self.queues[sid].join(), max(0.1, deadline - loop.time()))
+                    pending.pop(0)
+                except asyncio.TimeoutError:
+                    break
+            else:
+                await asyncio.sleep(0.2)  # the session_ended event is still on its way from the gateway
+        return pending
+
     def reset(self) -> None:
         for task in self.workers.values():
             task.cancel()

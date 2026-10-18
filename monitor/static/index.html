@@ -1,108 +1,182 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>SENTINEL-TRAP — Adaptive AI Security Gateway</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%9B%A1%EF%B8%8F%3C/text%3E%3C/svg%3E" />
-<link rel="stylesheet" href="/static/style.css" />
+<title>Sentinel-Trap · Security console</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 3 28 10v12L16 29 4 22V10z' fill='%23111827'/%3E%3Ccircle cx='16' cy='16' r='4.5' fill='%23f59e0b'/%3E%3C/svg%3E" />
+<link rel="preload" href="/static/fonts/ibm-plex-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="preload" href="/static/fonts/ibm-plex-mono-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="stylesheet" href="/static/style.css?v=5" />
 </head>
 <body>
-<!-- ============ TOP BAR ============ -->
 <header class="topbar">
   <div class="brand">
-    <span class="brand-mark">🛡️</span>
+    <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3 28 10v12L16 29 4 22V10z"/><circle cx="16" cy="16" r="4.5"/></svg>
     <div>
-      <h1>SENTINEL-TRAP</h1>
-      <p class="tagline">Adaptive AI security gateway · memory &amp; self-correction</p>
+      <h1>Sentinel-Trap</h1>
+      <p class="tagline"><span class="live-dot" id="ws-dot" aria-hidden="true"></span><span id="ws-state">Connecting…</span></p>
     </div>
   </div>
-  <div class="counters" id="counters">
-    <div class="counter"><span class="num" id="c-requests">0</span><span class="lbl">Requests</span></div>
-    <div class="counter attack"><span class="num" id="c-attacks">0</span><span class="lbl">Attacks detected</span></div>
-    <div class="counter trap"><span class="num" id="c-trapped">0</span><span class="lbl">Trapped</span></div>
-    <div class="counter ban"><span class="num" id="c-banned">0</span><span class="lbl">Banned</span></div>
-    <div class="counter learn"><span class="num" id="c-rules">0</span><span class="lbl">Rules learned</span></div>
-    <div class="counter fix"><span class="num" id="c-fixed">0</span><span class="lbl">False pos. fixed</span></div>
-  </div>
+
+  <dl class="kpis" aria-label="Totals">
+    <div class="kpi"><dt>Requests</dt><dd id="c-requests">0</dd></div>
+    <div class="kpi k-attack"><dt>Attacks</dt><dd id="c-attacks">0</dd></div>
+    <div class="kpi k-trap"><dt>Trapped</dt><dd id="c-trapped">0</dd></div>
+    <div class="kpi k-ban"><dt>Banned</dt><dd id="c-banned">0</dd></div>
+    <div class="kpi k-learn"><dt>Rules learned</dt><dd id="c-rules">0</dd></div>
+    <div class="kpi k-ok"><dt>False positives fixed</dt><dd id="c-fixed">0</dd></div>
+  </dl>
+
   <div class="top-actions">
-    <button class="chip" id="llm-chip" title="LLM analyst status — click to configure">
-      <span class="dot" id="llm-dot"></span><span id="llm-chip-text">analyst…</span>
+    <button class="chip" id="llm-chip" type="button" title="AI analyst status. Click to change settings.">
+      <span class="dot" aria-hidden="true"></span><span id="llm-chip-text">Analyst…</span>
     </button>
-    <button class="btn ghost" id="gear-btn" title="LLM settings">⚙</button>
-    <button class="btn danger" id="reset-btn" title="Clear all demo state">⟲ Reset</button>
+    <button class="icon-btn" id="gear-btn" type="button" aria-label="AI analyst settings" title="AI analyst settings">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>
+    </button>
+    <button class="btn ghost" id="reset-btn" type="button">Reset demo</button>
+    <button class="btn primary" id="banall-btn" type="button">Ban all hackers &amp; final report</button>
   </div>
 </header>
 
-<!-- ============ GRID ============ -->
 <main class="grid">
-  <!-- flow diagram -->
-  <section class="panel flow" id="panel-flow">
-    <h2>ATTACK FLOW</h2>
-    <div id="flow-svg"></div>
-    <div class="legit-split">
-      <div class="split legit"><span class="tag">LEGIT</span><span id="split-legit">—</span></div>
-      <div class="split attacker"><span class="tag">ATTACKER</span><span id="split-attacker">—</span></div>
+  <!-- Request flow (canvas) -->
+  <section class="panel flow" aria-labelledby="h-flow">
+    <div class="panel-head">
+      <h2 id="h-flow">Request flow</h2>
+      <ul class="legend" aria-label="Legend">
+        <li><i class="sw ok"></i>Allowed to app</li>
+        <li><i class="sw trap"></i>Trapped in honeypot</li>
+        <li><i class="sw bad"></i>Banned / blocked</li>
+        <li><i class="sw learn"></i>Learned rule</li>
+      </ul>
+    </div>
+    <div class="flow-stage" id="flow-stage">
+      <canvas id="flow-canvas" role="img" aria-label="Animated diagram of requests moving between user, gateway, service database, honeypot, LLM sandbox and decision layer"></canvas>
+      <div class="flow-banner hidden" id="flow-banner" role="status"></div>
+    </div>
+    <div class="split" aria-label="Most recent traffic">
+      <div><span class="tag ok">Last legit</span><code id="split-legit">—</code></div>
+      <div><span class="tag bad">Last attacker</span><code id="split-attacker">—</code></div>
     </div>
   </section>
 
-  <!-- live feed -->
-  <section class="panel feed" id="panel-feed">
-    <h2>LIVE EVENT FEED <span class="hint" id="ws-state">connecting…</span></h2>
-    <ul id="feed"></ul>
+  <!-- Honeypot activity + analyst -->
+  <section class="panel honeypot" aria-labelledby="h-hp">
+    <div class="panel-head">
+      <h2 id="h-hp">Honeypot activity</h2>
+      <span class="count" id="hp-count">0 sessions</span>
+    </div>
+    <div class="sessions" id="sessions"></div>
+    <p class="empty" id="sessions-empty">No one is in the honeypot. Attackers appear here the moment a rule flags them.</p>
+    <div class="analyst">
+      <div class="sub-head">
+        <h3>Analyst notes</h3>
+        <span class="src-tag" id="analyst-src">—</span>
+      </div>
+      <div id="report-card" class="report hidden"></div>
+      <ol id="analyst-stream" class="notes" aria-live="polite"></ol>
+    </div>
   </section>
 
-  <!-- honeypot activity -->
-  <section class="panel honeypot" id="panel-honeypot">
-    <h2>HONEYPOT ACTIVITY</h2>
-    <div id="sessions" class="sessions"></div>
-    <p class="empty" id="sessions-empty">No trapped attackers yet.</p>
+  <!-- Live event feed -->
+  <section class="panel feed" aria-labelledby="h-feed">
+    <div class="panel-head">
+      <h2 id="h-feed">Live event feed</h2>
+      <div class="seg" role="group" aria-label="Filter events">
+        <button type="button" class="on" data-filter="all">All</button>
+        <button type="button" data-filter="attack">Attacks</button>
+        <button type="button" data-filter="legit">Legit</button>
+      </div>
+    </div>
+    <ul id="feed" class="feed-list"></ul>
+    <p class="empty" id="feed-empty">Waiting for traffic on :8080.</p>
   </section>
 
-  <!-- analyst -->
-  <section class="panel analyst" id="panel-analyst">
-    <h2>AI ANALYST <span class="src-tag" id="analyst-src">—</span></h2>
-    <div id="analyst-stream" class="terminal"></div>
-    <div id="report-card" class="report hidden"></div>
+  <!-- Real vs fake -->
+  <section class="panel contrast" aria-labelledby="h-contrast">
+    <div class="panel-head">
+      <h2 id="h-contrast">Real data vs what the hacker got</h2>
+    </div>
+    <div class="cx-picker" id="cx-picker" role="tablist" aria-label="Honeypot responses"></div>
+    <div class="cx-body" id="cx-body"></div>
+    <p class="empty" id="cx-empty">When a trapped attacker pulls data, the fake rows they received appear here next to the real rows (masked).</p>
+    <p class="cx-foot" id="cx-foot"></p>
   </section>
 
-  <!-- memory & learning -->
-  <section class="panel memory" id="panel-memory">
-    <h2>MEMORY &amp; LEARNING</h2>
-    <h3>Banned attackers <span class="hint">(memory)</span></h3>
-    <table class="tbl"><thead><tr><th>Fingerprint</th><th>IP</th><th>Reason</th><th></th></tr></thead>
-      <tbody id="bans-body"></tbody></table>
-    <h3>Learned rules <span class="hint">(self-improvement)</span></h3>
-    <table class="tbl"><thead><tr><th>ID</th><th>Cat</th><th>Pattern</th><th>Hits</th><th>On</th></tr></thead>
-      <tbody id="rules-body"></tbody></table>
+  <!-- Memory & learning -->
+  <section class="panel memory" aria-labelledby="h-mem">
+    <div class="panel-head">
+      <h2 id="h-mem">Memory &amp; learned attacks</h2>
+    </div>
     <div id="beforeafter" class="beforeafter hidden">
-      <span class="ba-before">BEFORE · built-in score 0 → would reach app</span>
-      <span class="ba-arrow">→</span>
-      <span class="ba-after" id="ba-after">AFTER · learned rule caught the variant</span>
+      <div><span class="tag">Before</span>Built-in rules scored the reworded attack 0. It would have reached the app.</div>
+      <div><span class="tag learn">After</span><span id="ba-after">A learned rule caught it.</span></div>
     </div>
+    <h3>Banned attackers</h3>
+    <ul class="bans" id="bans-body"></ul>
+    <h3>Learned rules <span class="muted" id="rules-count"></span></h3>
+    <ul class="rules" id="rules-body"></ul>
+    <details class="builtins">
+      <summary>Built-in rules <span class="muted" id="builtin-count"></span></summary>
+      <ul class="rules" id="builtin-body"></ul>
+    </details>
   </section>
 </main>
 
-<!-- ============ LLM SETTINGS POPOVER ============ -->
-<div class="modal-backdrop hidden" id="gear-modal">
-  <div class="modal">
-    <h2>LLM analyst settings</h2>
-    <p class="muted">Paste your Kaggle tunnel URL. It changes every notebook restart — no container restart needed.</p>
-    <label>Base URL <input id="f-url" placeholder="https://xxxx.trycloudflare.com  (/v1 optional)" /></label>
-    <label>API key <input id="f-key" type="password" placeholder="leave blank to keep current" /></label>
-    <label>Model name <input id="f-model" placeholder="qwen3.6-35b-a3b" /></label>
-    <label class="row"><input id="f-enabled" type="checkbox" /> Enable LLM analyst (off = offline analyst)</label>
-    <label>Admin token <input id="f-token" type="password" placeholder="dev-admin-token" /></label>
-    <div class="modal-actions">
-      <button class="btn" id="f-test">Test connection</button>
-      <button class="btn primary" id="f-save">Save</button>
-      <button class="btn ghost" id="f-cancel">Close</button>
+<!-- AI analyst settings -->
+<dialog id="gear-modal" class="sheet narrow" aria-labelledby="gear-title">
+  <form method="dialog" class="sheet-inner" id="gear-form">
+    <h2 id="gear-title">AI analyst settings</h2>
+    <p class="muted">Paste your tunnel URL. It changes every time the notebook restarts; no container restart needed.</p>
+    <label>Base URL <input id="f-url" autocomplete="off" placeholder="https://xxxx.trycloudflare.com (/v1 optional)" /></label>
+    <label>API key <input id="f-key" type="password" autocomplete="off" /></label>
+    <label>Model name <input id="f-model" autocomplete="off" /></label>
+    <label class="row"><input id="f-enabled" type="checkbox" /> Use the AI model (off = offline analyst)</label>
+    <label>Admin token <input id="f-token" type="password" autocomplete="off" placeholder="dev-admin-token" /></label>
+    <div class="sheet-actions">
+      <button class="btn" id="f-test" type="button">Test connection</button>
+      <button class="btn primary" id="f-save" type="button">Save</button>
+      <button class="btn ghost" id="f-cancel" type="button">Close</button>
     </div>
     <pre id="f-result" class="result"></pre>
-  </div>
-</div>
+  </form>
+</dialog>
 
-<div id="toast" class="toast hidden"></div>
-<script src="/static/app.js"></script>
+<!-- Confirm -->
+<dialog id="confirm-modal" class="sheet narrow" aria-labelledby="confirm-title">
+  <div class="sheet-inner">
+    <h2 id="confirm-title"></h2>
+    <div id="confirm-body" class="muted"></div>
+    <div class="sheet-actions">
+      <button class="btn ghost" id="confirm-alt" type="button" hidden></button>
+      <button class="btn ghost" id="confirm-no" type="button">Cancel</button>
+      <button class="btn primary" id="confirm-yes" type="button"></button>
+    </div>
+  </div>
+</dialog>
+
+<!-- Final report -->
+<dialog id="report-modal" class="sheet wide" aria-labelledby="fr-title">
+  <div class="sheet-inner">
+    <div class="fr-head">
+      <div>
+        <h2 id="fr-title">Final incident report</h2>
+        <p class="muted" id="fr-sub"></p>
+      </div>
+      <div class="sheet-actions">
+        <button class="btn" id="fr-download" type="button" disabled>Download JSON</button>
+        <button class="btn" id="fr-print" type="button" disabled>Print</button>
+        <button class="btn ghost" id="fr-close" type="button">Close</button>
+      </div>
+    </div>
+    <ol class="steps" id="fr-steps"></ol>
+    <div id="fr-body"></div>
+  </div>
+</dialog>
+
+<div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+<script src="/static/app.js?v=5"></script>
 </body>
 </html>

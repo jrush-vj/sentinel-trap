@@ -244,13 +244,21 @@ def commit_ban(fp: str, ip: str, reason: str, session: str) -> None:
                     verdict="malicious", risk=10, detail=f"ban: {reason}"))
 
 
+def end_session(row, reason: str) -> None:
+    """Ban a trapped attacker and announce the session end, so the monitor writes the report and learns."""
+    commit_ban(row["fingerprint"], row["ip"], reason, row["session_id"])
+    store.mark_ended(row["session_id"])  # commit_ban skips this when the attacker was already banned
+    emit(make_event("session_ended", session_id=row["session_id"], fingerprint=row["fingerprint"],
+                    attacker_ip=row["ip"], channel="system", verdict="malicious", risk=row["risk"], detail=reason))
+
+
 async def idle_sweeper() -> None:
     """Ban-eligible sessions that go quiet (attacker left) are ended + banned after BAN_IDLE_SECONDS."""
     while True:
         await asyncio.sleep(10)
         try:
             for row in store.idle_eligible_sessions(BAN_IDLE_SECONDS):
-                commit_ban(row["fingerprint"], row["ip"], "ban-eligible session idle", row["session_id"])
+                end_session(row, "ban-eligible session idle")
         except Exception as exc:
             log.warning("idle sweeper error: %s", exc)
 
@@ -289,6 +297,32 @@ async def admin_ban(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     session = payload.get("session_id", fp or ip)
     commit_ban(fp, ip, reason, session)
     return {"banned": True, "fingerprint": fp, "ip": ip}
+
+
+@app.post("/admin/end-all", dependencies=[Depends(require_admin)])
+async def admin_end_all(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """Operator action: eject every attacker still in the honeypot and ban them."""
+    reason = str(payload.get("reason") or "operator ended all honeypot sessions")
+    ended = []
+    for row in store.open_sessions():
+        end_session(row, reason)
+        ended.append(row["session_id"])
+    return {"ended": ended}
+
+
+@app.post("/admin/rules/check", dependencies=[Depends(require_admin)])
+async def admin_rules_check(payload: dict[str, Any] = Body(...)) -> list[dict[str, Any]]:
+    """Dry run: which enabled rules would catch each payload now. Does not change hit counters."""
+    rules = [r for r in engine.all_rules() if r.enabled]
+    out = []
+    for text in [str(p) for p in payload.get("payloads", [])][:50]:
+        variants = normalize_variants(text)
+        matched = [r for r in rules if r.matches(variants)]
+        # any match sends the request to the honeypot (suspicious and malicious both route there)
+        out.append({"payload": text, "rule_ids": [r.id for r in matched],
+                    "learned_rule_ids": [r.id for r in matched if r.source == "learned"],
+                    "caught": bool(matched)})
+    return out
 
 
 @app.post("/admin/rules/propose", dependencies=[Depends(require_admin)])
@@ -348,7 +382,7 @@ async def admin_mark_safe(payload: dict[str, Any] = Body(...)) -> dict[str, Any]
         # also store the squashed variant so obfuscation-normalized matches are whitelisted
         for v in normalize_variants(example):
             store.add_whitelist(v, note="marked safe")
-    emit(make_event("marked_safe", channel="system", verdict="clean", risk=0, rule_id=rule_id,
+    emit(make_event("marked_safe", fingerprint=fp or "", attacker_ip=ip or "", channel="system", verdict="clean", risk=0, rule_id=rule_id,
                     payload=str(example or fp or ip or ""),
                     detail=f"false positive corrected (unbanned={removed}, disabled_rule={disabled_rule})"))
     return {"ok": True, "unbanned": removed, "disabled_rule": disabled_rule}
