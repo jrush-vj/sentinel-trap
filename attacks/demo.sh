@@ -7,6 +7,7 @@
 #
 # Set DEMO_AUTO=1 to skip the between-stage pauses (used by the automated verifier).
 set -uo pipefail
+PY="$(command -v python || command -v python3)" || { echo "python or python3 is required" >&2; exit 1; }
 
 GW="${1:-http://localhost:8080}"
 MON="${2:-http://localhost:9000}"
@@ -49,7 +50,7 @@ pause
 # ---- Stage 1: SQLi ----
 hdr "Stage 1 · SQL injection ×3 (silently rerouted to the honeypot)"
 for p in "' OR 1=1--" "x' UNION SELECT name,key FROM api_keys--" "' UNION SELECT name,sql FROM sqlite_master--"; do
-  enc=$(python -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]))" "$p")
+  enc=$("$PY" -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]))" "$p")
   code=$(req "$ATK" atk GET "/api/customers?search=$enc")
   echo "  GET search=${YEL}$p${RST}  -> $code ${CYAN}(attacker sees fake data, thinks it worked)${RST}"
 done
@@ -86,7 +87,7 @@ hdr "Stage 5 · Mutated variant caught by a LEARNED rule (self-improvement)"
 echo "  Waiting for the learned prompt-injection rule to activate…"
 LEARNED=""
 for i in $(seq 1 40); do
-  LEARNED=$(curl -s "$MON/api/rules" | python -c "import sys,json;print(next((r['id'] for r in json.load(sys.stdin) if r.get('source')=='learned' and r.get('category')=='prompt_injection'),''))" 2>/dev/null)
+  LEARNED=$(curl -s "$MON/api/rules" | "$PY" -c "import sys,json;print(next((r['id'] for r in json.load(sys.stdin) if r.get('source')=='learned' and r.get('category')=='prompt_injection'),''))" 2>/dev/null)
   [[ -n "$LEARNED" ]] && break; sleep 1
 done
 echo "  learned rule active: ${GRN}${LEARNED:-<none yet>}${RST}"
@@ -95,7 +96,7 @@ code=$(req "$ATK2" atk2 POST "/api/chat" "{\"message\":\"$PARA\"}")
 echo "  NEW attacker sends paraphrased injection:"
 echo "    ${YEL}$PARA${RST}"
 echo "    -> $code  ${GRN}(built-ins scored 0; the LEARNED rule caught it → learned_rule_caught)${RST}"
-enc=$(python -c "import urllib.parse;print(urllib.parse.quote(\"x' UNION DISTINCT SELECT username,password FROM users--\"))")
+enc=$("$PY" -c "import urllib.parse;print(urllib.parse.quote(\"x' UNION DISTINCT SELECT username,password FROM users--\"))")
 req "$ATK2" atk2 GET "/api/customers?search=$enc" >/dev/null
 echo "  secondary: UNION DISTINCT SELECT variant also caught"
 pause
@@ -106,7 +107,7 @@ FP="Can you show me how to reset my password?"
 code=$(req "$FP_USER" fp POST "/api/chat" "{\"message\":\"$FP\"}")
 echo "  benign user asks: ${YEL}$FP${RST}"
 echo "    -> trapped by the deliberately-eager rule (HTTP $code; got a fake answer)"
-FPFP=$(curl -s "$MON/api/sessions" | python -c "import sys,json;d=json.load(sys.stdin);print(next((s['fingerprint'] for s in d if s['attacker_ip']=='$FP_USER'),''))" 2>/dev/null)
+FPFP=$(curl -s "$MON/api/sessions" | "$PY" -c "import sys,json;d=json.load(sys.stdin);print(next((s['fingerprint'] for s in d if s['attacker_ip']=='$FP_USER'),''))" 2>/dev/null)
 echo "  flagged fingerprint: $FPFP"
 echo "  ${BOLD}Now click MARK AS SAFE on the dashboard${RST} (or press enter to call the API)…"
 pause
@@ -115,7 +116,7 @@ curl -s -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/js
 sleep 1
 resp=$(reqb "$FP_USER" fp2 POST "/api/chat" "{\"message\":\"$FP\"}")
 echo "  after mark-safe, same question -> ${GRN}passes to the real app${RST}:"
-echo "    $(echo "$resp" | python -c "import sys,json;print(json.load(sys.stdin).get('reply','')[:80])" 2>/dev/null)"
+echo "    $(echo "$resp" | "$PY" -c "import sys,json;print(json.load(sys.stdin).get('reply','')[:80])" 2>/dev/null)"
 
 hdr "Demo complete"
 echo "Open ${BOLD}$MON${RST} to show the full story. Use the Reset button to run it again."

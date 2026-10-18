@@ -4,12 +4,13 @@
 #
 #   scripts/verify.sh [GATEWAY_HOST] [MONITOR_HOST]
 set -uo pipefail
+PY="$(command -v python || command -v python3)" || { echo "python or python3 is required" >&2; exit 1; }
 GW="${1:-http://localhost:8080}"; MON="${2:-http://localhost:9000}"
 ADMIN="${ADMIN_TOKEN:-dev-admin-token}"
 PASS=0; FAIL=0
 GRN=$'\e[32m'; RED=$'\e[31m'; RST=$'\e[0m'
 
-jq_count() { python -c "import sys,json;d=json.load(sys.stdin);print(sum(1 for e in d if e.get('action')=='$1'))"; }
+jq_count() { "$PY" -c "import sys,json;d=json.load(sys.stdin);print(sum(1 for e in d if e.get('action')=='$1'))"; }
 check() { # check "label" <actual> <op> <expected>
   local label="$1" actual="$2" op="$3" exp="$4"
   if [[ "$op" == "ge" && "$actual" -ge "$exp" ]] || [[ "$op" == "eq" && "$actual" == "$exp" ]]; then
@@ -34,7 +35,7 @@ check "attacks routed to honeypot"       "$(echo "$EVENTS" | jq_count routed_to_
 check "honeypot interactions"            "$(echo "$EVENTS" | jq_count honeypot_interaction)" ge 2
 check "canary hit"                       "$(echo "$EVENTS" | jq_count canary_hit)"           ge 1
 check "ban created"                      "$(echo "$EVENTS" | jq_count banned)"               ge 1
-check "ban row present"                  "$(echo "$BANS" | python -c 'import sys,json;print(len(json.load(sys.stdin)))')" ge 1
+check "ban row present"                  "$(echo "$BANS" | "$PY" -c 'import sys,json;print(len(json.load(sys.stdin)))')" ge 1
 check "return visit blocked (403)"       "$(echo "$EVENTS" | jq_count blocked)"              ge 1
 check "rule learned"                     "$(echo "$EVENTS" | jq_count rule_learned)"         ge 1
 check "learned rule caught the variant"  "$(echo "$EVENTS" | jq_count learned_rule_caught)"  ge 1
