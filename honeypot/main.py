@@ -130,7 +130,7 @@ async def chat(request: Request) -> JSONResponse:
         source = "offline"
     report(c, "prompt", message, f"fake prompt-injection leak ({source})", "canary key leaked",
            kind="prompt", sample=reply[:300])
-    model = llm.load_config().get("model", "novamind")
+    model = llm.DISPLAY_MODEL
     return JSONResponse({"reply": reply, "model": model, "source": source})
 
 

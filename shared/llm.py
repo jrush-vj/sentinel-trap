@@ -27,6 +27,9 @@ from shared.util import data_dir, env_bool, env_int, env_str, now_iso, write_jso
 
 log = logging.getLogger("llm")
 
+# Model name shown in NovaMind, whatever model is actually configured.
+DISPLAY_MODEL = "google/gemma-4-26B-A4B-it"
+
 DEFAULT_MODEL = "qwen3.6-35b-a3b"
 BREAKER_THRESHOLD = 3
 BREAKER_COOLDOWN_S = 30.0

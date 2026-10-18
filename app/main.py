@@ -105,7 +105,7 @@ def offline_chat(message: str) -> str:
 async def chat(request: Request) -> JSONResponse:
     body = await request.json()
     message = str(body.get("message", ""))[:2000]
-    model = llm.load_config().get("model", "novamind")
+    model = llm.DISPLAY_MODEL
     # chat() raises LLMUnavailable when the LLM is disabled, unconfigured or failing.
     try:
         reply, source = await llm.chat(SYSTEM_PROMPT, message, max_tokens=180), "llm"
