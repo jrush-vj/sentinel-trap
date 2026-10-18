@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>NovaMind — AI Support Desk</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9C%A8%3C/text%3E%3C/svg%3E" />
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+<header class="nav">
+  <div class="logo"><span class="spark">✦</span> NovaMind <span class="sub">AI Support Desk</span></div>
+  <nav><a class="active">Dashboard</a><a>Billing</a><a>Docs</a><span class="avatar">NM</span></nav>
+</header>
+
+<main class="shell">
+  <section class="hero">
+    <h1>Welcome back 👋</h1>
+    <p>Look up a customer, or ask the NovaMind assistant anything about your account.</p>
+  </section>
+
+  <div class="cards">
+    <!-- Customer lookup -->
+    <section class="card">
+      <div class="card-head"><h2>🔎 Customer lookup</h2><span class="pill">live</span></div>
+      <form id="search-form" class="searchbar" autocomplete="off">
+        <input id="search" name="search" placeholder="Search by name or email, e.g. alice" />
+        <button class="btn primary">Search</button>
+      </form>
+      <div id="search-meta" class="meta"></div>
+      <div class="table-wrap"><table class="data"><thead>
+        <tr><th>ID</th><th>Name</th><th>Email</th><th>Plan</th><th>Country</th></tr></thead>
+        <tbody id="results"><tr><td colspan="5" class="muted">Try searching for <b>alice</b> or <b>garcia</b>.</td></tr></tbody>
+      </table></div>
+    </section>
+
+    <!-- AI assistant -->
+    <section class="card">
+      <div class="card-head"><h2>💬 NovaMind Assistant</h2><span class="pill" id="chat-src">ready</span></div>
+      <div id="chat" class="chat">
+        <div class="msg bot">Hi! I'm the NovaMind assistant. Ask me about plans, billing or support hours.</div>
+      </div>
+      <form id="chat-form" class="chatbar" autocomplete="off">
+        <input id="chat-input" placeholder="What are your support hours?" />
+        <button class="btn primary">Send</button>
+      </form>
+      <div class="suggest">
+        <button class="chip-s">What are your support hours?</button>
+        <button class="chip-s">How do I upgrade my plan?</button>
+        <button class="chip-s">Do you offer refunds?</button>
+      </div>
+    </section>
+  </div>
+  <footer class="foot">NovaMind Inc. · demo environment · all data is fictional</footer>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>

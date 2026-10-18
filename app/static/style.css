@@ -1,0 +1,53 @@
+/* NovaMind AI Support Desk — polished product UI (dark). Served by app and honeypot alike. */
+:root {
+  --bg: #0b1020; --bg2: #121a30; --card: #141d36; --ink: #eaf0fb; --muted: #93a4c6;
+  --line: #243357; --brand: #7c6bff; --brand2: #38e0d0; --ok: #2fd27a; --font: "Segoe UI", system-ui, sans-serif;
+  --mono: "Cascadia Code", "Consolas", monospace;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: radial-gradient(1100px 500px at 85% -15%, #1c2850 0, var(--bg) 55%); color: var(--ink); font-family: var(--font); min-height: 100vh; }
+a { color: inherit; cursor: pointer; }
+
+.nav { display: flex; align-items: center; justify-content: space-between; padding: 14px 28px; border-bottom: 1px solid var(--line); background: #0d1428cc; backdrop-filter: blur(6px); position: sticky; top: 0; z-index: 5; }
+.logo { font-size: 20px; font-weight: 700; letter-spacing: .02em; }
+.logo .spark { color: var(--brand2); } .logo .sub { color: var(--muted); font-weight: 400; font-size: 14px; margin-left: 6px; }
+.nav nav { display: flex; align-items: center; gap: 22px; font-size: 14px; color: var(--muted); }
+.nav nav a.active { color: var(--ink); } .nav nav a:hover { color: var(--brand2); }
+.avatar { width: 34px; height: 34px; border-radius: 50%; background: linear-gradient(135deg, var(--brand), var(--brand2)); color: #091; display: grid; place-items: center; font-weight: 700; font-size: 13px; color: #07121f; }
+
+.shell { max-width: 1120px; margin: 0 auto; padding: 30px 24px 60px; }
+.hero h1 { margin: 0 0 6px; font-size: 30px; }
+.hero p { margin: 0 0 24px; color: var(--muted); font-size: 16px; }
+.cards { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+@media (max-width: 920px) { .cards { grid-template-columns: 1fr; } }
+
+.card { background: linear-gradient(180deg, var(--card), #0f1730); border: 1px solid var(--line); border-radius: 18px; padding: 20px; box-shadow: 0 18px 40px #0006; }
+.card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.card-head h2 { font-size: 18px; margin: 0; }
+.pill { font-size: 11px; color: var(--ok); background: #06351f; border: 1px solid #0a5; padding: 3px 10px; border-radius: 999px; }
+
+.searchbar, .chatbar { display: flex; gap: 10px; }
+input { flex: 1; padding: 12px 14px; background: #0a1226; border: 1px solid var(--line); border-radius: 11px; color: var(--ink); font-size: 15px; }
+input:focus { outline: none; border-color: var(--brand2); box-shadow: 0 0 0 3px #38e0d033; }
+.btn { border: none; border-radius: 11px; padding: 12px 18px; font-size: 15px; font-weight: 600; cursor: pointer; }
+.btn.primary { background: linear-gradient(135deg, var(--brand), var(--brand2)); color: #07121f; }
+.btn.primary:hover { filter: brightness(1.08); }
+
+.meta { color: var(--muted); font-size: 13px; margin: 10px 2px; min-height: 18px; }
+.table-wrap { max-height: 320px; overflow: auto; border-radius: 12px; border: 1px solid var(--line); }
+.data { width: 100%; border-collapse: collapse; font-size: 14px; }
+.data th { position: sticky; top: 0; background: #101a33; text-align: left; padding: 10px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.data td { padding: 10px; border-top: 1px solid #1b2746; }
+.data tr:hover td { background: #121d3a; }
+.muted { color: var(--muted); } .mono { font-family: var(--mono); }
+.plan-badge { font-size: 11px; padding: 2px 8px; border-radius: 6px; background: #1c2banner; }
+
+.chat { height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 6px; margin-bottom: 12px; }
+.msg { max-width: 82%; padding: 10px 14px; border-radius: 14px; font-size: 14.5px; line-height: 1.4; white-space: pre-wrap; word-break: break-word; }
+.msg.bot { background: #16213f; border: 1px solid var(--line); align-self: flex-start; border-bottom-left-radius: 4px; }
+.msg.me { background: linear-gradient(135deg, var(--brand), #5f8bff); color: #fff; align-self: flex-end; border-bottom-right-radius: 4px; }
+.msg.typing { color: var(--muted); font-style: italic; }
+.suggest { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.chip-s { background: #121d3a; border: 1px solid var(--line); color: var(--muted); border-radius: 999px; padding: 7px 13px; font-size: 13px; cursor: pointer; }
+.chip-s:hover { border-color: var(--brand2); color: var(--ink); }
+.foot { text-align: center; color: var(--muted); font-size: 12px; margin-top: 34px; }
