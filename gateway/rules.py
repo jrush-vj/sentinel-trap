@@ -30,7 +30,7 @@ CANARY_PATTERNS = [re.compile(p, re.IGNORECASE) for p in (
 @dataclass
 class Rule:
     id: str
-    category: str          # sqli | prompt_injection | other
+    category: str          # sqli | prompt_injection | log_injection | other
     regex: str
     severity: int          # 1-10
     source: str            # builtin | learned
@@ -110,6 +110,15 @@ def builtin_rules() -> list[Rule]:
         R("BI-PI-B64", "prompt_injection",
           r"(decode|execute|run)\s+(this\s+)?(base64|b64)|base64\s*:\s*[a-z0-9+/]{20,}", 4,
           description="Base64-instruction smuggling hint"),
+        # --- Log injection (normalization collapses newlines, so match the forged entry itself) ---
+        R("BI-LOG-FORGED", "log_injection",
+          r"\d{4}-\d{2}-\d{2}[t ]?\d{2}:\d{2}(:\d{2})?\S*\s*[\[|-]?\s*(info|warn|warning|error|debug|audit|notice|critical|fatal)\b", 6,
+          description="Forged log entry (timestamp + level) inside user input"),
+        R("BI-LOG-JNDI", "log_injection", r"\$\{\s*(jndi|env|sys|ctx|java|lower|upper|date)\s*:", 7,
+          description="Log4Shell-style ${jndi:...} lookup"),
+        R("BI-LOG-ANSI", "log_injection", r"(\x1b|\\x1b|\\u001b|\\033)\[\d", 5,
+          description="Terminal escape sequence aimed at log viewers"),
+
         # Deliberately over-eager exfil rule (fuels the Mark-as-safe demo):
         R("BI-PI-EXFIL-EAGER", "prompt_injection",
           r"(show|give|tell|send)\b.{0,30}\b(api\s*key|secret|password|credential)", 4,

@@ -5,18 +5,45 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>NovaMind — AI Support Desk</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9C%A8%3C/text%3E%3C/svg%3E" />
-<link rel="stylesheet" href="/static/style.css" />
+<link rel="stylesheet" href="/static/style.css?v=2" />
 </head>
 <body>
 <header class="nav">
   <div class="logo"><span class="spark">✦</span> NovaMind <span class="sub">AI Support Desk</span></div>
-  <nav><a class="active">Dashboard</a><a>Billing</a><a>Docs</a><span class="avatar">NM</span></nav>
+  <nav><a class="active">Dashboard</a><a>Billing</a><a>Docs</a>
+    <span id="user-box" class="user-box" hidden><span id="user-name"></span><button id="logout" class="link" type="button">Sign out</button></span>
+    <span class="avatar" id="avatar">NM</span></nav>
 </header>
 
-<main class="shell">
+<!-- Sign in / create account -->
+<main class="shell" id="auth-view" hidden>
+  <section class="card auth-card">
+    <div class="tabs" role="tablist">
+      <button type="button" role="tab" class="tab on" data-mode="login" aria-selected="true">Sign in</button>
+      <button type="button" role="tab" class="tab" data-mode="signup" aria-selected="false">Create account</button>
+    </div>
+    <form id="auth-form" class="auth-form" autocomplete="off">
+      <label>Username <input id="auth-user" required minlength="3" maxlength="20" placeholder="e.g. user1" autocomplete="username" /></label>
+      <label>Password <input id="auth-pass" type="password" required minlength="4" maxlength="64" autocomplete="current-password" /></label>
+      <button class="btn primary" id="auth-submit">Sign in</button>
+      <p id="auth-msg" class="meta" role="alert"></p>
+    </form>
+  </section>
+</main>
+
+<!-- Account suspended (banned) -->
+<main class="shell" id="denied-view" hidden>
+  <section class="card auth-card">
+    <h2>Access denied</h2>
+    <p class="muted">This account has been suspended. You don't have permission to access NovaMind with it.</p>
+    <button class="btn primary" id="denied-back" type="button">Back to sign in</button>
+  </section>
+</main>
+
+<main class="shell" id="app-view" hidden>
   <section class="hero">
-    <h1>Welcome back 👋</h1>
-    <p>Look up a customer, or ask the NovaMind assistant anything about your account.</p>
+    <h1>Welcome back, <span id="hello-name"></span> 👋</h1>
+    <p>Look up a customer, ask the NovaMind assistant, or report an issue to the team.</p>
   </section>
 
   <div class="cards">
@@ -45,14 +72,30 @@
         <button class="btn primary">Send</button>
       </form>
       <div class="suggest">
-        <button class="chip-s">What are your support hours?</button>
-        <button class="chip-s">How do I upgrade my plan?</button>
-        <button class="chip-s">Do you offer refunds?</button>
+        <button class="chip-s" type="button">What are your support hours?</button>
+        <button class="chip-s" type="button">How do I upgrade my plan?</button>
+        <button class="chip-s" type="button">Do you offer refunds?</button>
+      </div>
+    </section>
+
+    <!-- Report an issue -> team activity log -->
+    <section class="card wide">
+      <div class="card-head"><h2>📝 Report an issue</h2><span class="pill">team log</span></div>
+      <div class="report-grid">
+        <form id="fb-form" class="fb-form" autocomplete="off">
+          <textarea id="fb-input" rows="5" maxlength="1000" placeholder="Describe the problem. It is added to the team activity log."></textarea>
+          <button class="btn primary">Submit report</button>
+          <div id="fb-meta" class="meta"></div>
+        </form>
+        <div>
+          <div class="sub-head muted">Team activity log</div>
+          <ol id="log-lines" class="log-lines"><li class="muted">Loading…</li></ol>
+        </div>
       </div>
     </section>
   </div>
   <footer class="foot">NovaMind Inc. · demo environment · all data is fictional</footer>
 </main>
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v=4"></script>
 </body>
 </html>

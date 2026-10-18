@@ -16,6 +16,9 @@ _SIGNATURES: list[tuple[re.Pattern, str, str, str]] = [
     (re.compile(r"(reveal|print|show|dump).{0,20}(system|hidden|initial)\s+prompt", re.I), "System-prompt exfiltration", "T1552", "prompt_leak"),
     (re.compile(r"disregard|forget everything", re.I), "Paraphrased prompt injection", "T1059", "prompt_leak"),
     (re.compile(r"you are now|developer mode|dan\b|jailbreak", re.I), "Jailbreak persona override", "T1059", "privesc"),
+    (re.compile(r"\$\{\s*jndi:|\d{4}-\d{2}-\d{2}[t ]?\d{2}:\d{2}.{0,16}\b(info|warn|error|debug|audit)\b"
+                r"|\b(info|warn|error|debug|audit)\b\]?\s*[:|-]?\s*(user|admin|action|status)\s*=", re.I),
+     "Log injection (forged audit-log entry)", "T1565.001", "log_tamper"),
     (re.compile(r"nm_live_canary|/api/internal/keys|\.env", re.I), "Canary token / internal-endpoint abuse", "T1552", "data_exfil"),
     (re.compile(r"api\s*key|secret|password|credential", re.I), "Credential exfiltration attempt", "T1552", "data_exfil"),
 ]
@@ -31,6 +34,7 @@ def commentary(action: str, payload: str, risk: int) -> dict[str, Any]:
         technique, mitre, intent = "Canary token reuse (confirmed malicious)", "T1552", "data_exfil"
     verb = {"recon": "probing the service", "data_exfil": "trying to exfiltrate data",
             "privesc": "attempting privilege escalation", "prompt_leak": "trying to leak the system prompt",
+            "log_tamper": "forging entries in the audit log",
             "other": "interacting with the trap"}[intent]
     return {
         "commentary": f"Attacker is {verb} using {technique.lower()}. Served believable decoy data; staying trapped.",
@@ -50,7 +54,8 @@ def report(ip: str, fingerprint: str, payloads: list[str], risk: int) -> dict[st
             if m not in iocs:
                 iocs.append(m)
     goal = ("Exfiltrate credentials/data" if "data_exfil" in intents
-            else "Leak the AI system prompt" if "prompt_leak" in intents else "Reconnaissance")
+            else "Leak the AI system prompt" if "prompt_leak" in intents
+            else "Forge audit-log entries" if "log_tamper" in intents else "Reconnaissance")
     return {
         "summary": (f"Attacker {fingerprint} ({ip}) ran {len(payloads)} actions against the honeypot, "
                     f"combining {', '.join(techniques[:3]) or 'several techniques'}. All data served was fake; "
@@ -85,6 +90,14 @@ FALLBACK_PROPOSALS: dict[str, dict[str, Any]] = {
         "regex": r"union\s*(all|distinct)?\s*select",
         "example_payload": "x' UNION DISTINCT SELECT username,password FROM users--",
         "reasoning": "Generalizes UNION-based extraction including ALL/DISTINCT and spacing variants.",
+        "source": "offline",
+    },
+    "log_injection": {
+        "category": "log_injection",
+        # Catches forged entries even WITHOUT the timestamp the built-in rule needs ("INFO user=admin ...").
+        "regex": r"\b(info|warn|warning|error|debug|audit|notice|critical|fatal)\b\]?\s*[:|-]?\s*(user|username|admin|action|status|login|session|event)\s*=|\$\{\s*[a-z]+\s*:",
+        "example_payload": "Thanks! INFO user=admin action=login status=success",
+        "reasoning": "Generalizes forged log lines to any level + key=value entry and any ${lookup:} expression.",
         "source": "offline",
     },
     "other": {

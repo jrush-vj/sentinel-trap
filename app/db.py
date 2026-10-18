@@ -5,6 +5,8 @@ has something believable to "steal". This DB is only reachable through the gatew
 """
 from __future__ import annotations
 
+import hashlib
+import secrets
 import sqlite3
 
 from shared.util import data_dir
@@ -43,6 +45,8 @@ def seed() -> None:
             id INTEGER PRIMARY KEY, owner TEXT, key TEXT, scope TEXT);
         CREATE TABLE IF NOT EXISTS secrets (
             id INTEGER PRIMARY KEY, name TEXT, value TEXT);
+        CREATE TABLE IF NOT EXISTS users (
+            username TEXT PRIMARY KEY, salt TEXT, pw_hash TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         """
     )
     if cur.execute("SELECT COUNT(*) FROM customers").fetchone()[0] == 0:
@@ -94,3 +98,56 @@ def customer_search(term: str) -> list[dict]:
         return [dict(r) for r in rows]
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------- accounts (parameterised, NOT a demo target)
+def _hash(password: str, salt: str) -> str:
+    return hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), 200_000).hex()
+
+
+def create_user(username: str, password: str) -> bool:
+    """False if the username is taken."""
+    salt = secrets.token_hex(16)
+    conn = connect()
+    try:
+        conn.execute("INSERT INTO users (username, salt, pw_hash) VALUES (?,?,?)",
+                     (username, salt, _hash(password, salt)))
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        conn.close()
+
+
+def check_user(username: str, password: str) -> bool:
+    conn = connect()
+    try:
+        row = conn.execute("SELECT salt, pw_hash FROM users WHERE username=?", (username,)).fetchone()
+    finally:
+        conn.close()
+    return bool(row) and secrets.compare_digest(_hash(password, row["salt"]), row["pw_hash"])
+
+
+# ======================================================================================
+#  DELIBERATE DEMO VULNERABILITY — log injection
+# --------------------------------------------------------------------------------------
+#  User feedback is written into the team activity log verbatim, newlines included, so a
+#  message can forge extra log lines (e.g. a fake "INFO user=admin action=login" entry).
+#  Real code would escape CR/LF before logging.
+# ======================================================================================
+def log_path():
+    return data_dir() / "activity.log"
+
+
+def append_log(line: str) -> None:
+    with open(log_path(), "a", encoding="utf-8") as fh:
+        fh.write(line + "\n")
+
+
+def recent_log(limit: int = 15) -> list[str]:
+    try:
+        lines = log_path().read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return []
+    return lines[-limit:]

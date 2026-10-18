@@ -1,7 +1,9 @@
 """Reputation store (DATA_DIR/reputation.db): bans, attacker sessions, and the mark-safe whitelist.
 
-This is the gateway's MEMORY. Bans match on fingerprint OR ip, so clearing cookies does not evade a
-ban (the ip still matches). The gateway is the only writer.
+This is the gateway's MEMORY. Anonymous bans match on fingerprint OR ip, so clearing cookies does not
+evade a ban (the ip still matches). Account bans (logged-in demo users, session_id "acct:<name>") store
+only the account: on a shared LAN/NAT ip, banning the ip would also lock out every other account.
+The gateway is the only writer.
 """
 from __future__ import annotations
 
@@ -31,7 +33,8 @@ CREATE TABLE IF NOT EXISTS attackers (
 CREATE TABLE IF NOT EXISTS bans (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     fingerprint TEXT, ip TEXT, reason TEXT,
-    first_seen TEXT, banned_at TEXT, prior_attacks INTEGER DEFAULT 0
+    first_seen TEXT, banned_at TEXT, prior_attacks INTEGER DEFAULT 0,
+    account TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_bans_fp ON bans(fingerprint);
 CREATE INDEX IF NOT EXISTS idx_bans_ip ON bans(ip);
@@ -49,6 +52,10 @@ def conn() -> sqlite3.Connection:
         _conn.row_factory = sqlite3.Row
         _conn.execute("PRAGMA journal_mode=DELETE")
         _conn.executescript(SCHEMA)
+        try:  # databases created before account bans existed
+            _conn.execute("ALTER TABLE bans ADD COLUMN account TEXT")
+        except sqlite3.OperationalError:
+            pass
     return _conn
 
 
@@ -103,7 +110,9 @@ def idle_eligible_sessions(idle_seconds: int) -> list[sqlite3.Row]:
     """Ban-eligible, not-yet-ended sessions whose last activity is older than idle_seconds."""
     cutoff = time.time() - idle_seconds
     with _lock:
-        rows = conn().execute("SELECT * FROM attackers WHERE ban_eligible=1 AND ended=0").fetchall()
+        # account sessions wait for the operator's Ban button instead
+        rows = conn().execute("SELECT * FROM attackers WHERE ban_eligible=1 AND ended=0 "
+                              "AND session_id NOT LIKE 'acct:%'").fetchall()
     out = []
     for r in rows:
         try:
@@ -116,28 +125,34 @@ def idle_eligible_sessions(idle_seconds: int) -> list[sqlite3.Row]:
 
 
 # ---------------- bans ----------------
-def is_banned(fingerprint: str, ip: str) -> sqlite3.Row | None:
+def is_banned(fingerprint: str | None, ip: str | None, account: str | None = None) -> sqlite3.Row | None:
+    """Logged-in requests match the account, the same browser fingerprint, or a meaningful ip (the caller
+    passes None for the shared Docker NAT ip, so one account's ban never hits another)."""
+    if account:
+        sql, args = "account=? OR fingerprint=? OR ip=?", (account, fingerprint, ip)
+    else:
+        sql, args = "fingerprint=? OR ip=?", (fingerprint, ip)
     with _lock:
-        return conn().execute(
-            "SELECT * FROM bans WHERE fingerprint=? OR ip=? ORDER BY banned_at LIMIT 1",
-            (fingerprint, ip)).fetchone()
+        return conn().execute(f"SELECT * FROM bans WHERE {sql} ORDER BY banned_at LIMIT 1", args).fetchone()
 
 
-def add_ban(fingerprint: str, ip: str, reason: str, first_seen: str | None = None, prior_attacks: int = 0) -> sqlite3.Row:
+def add_ban(fingerprint: str | None, ip: str | None, reason: str, first_seen: str | None = None,
+            prior_attacks: int = 0, account: str | None = None) -> sqlite3.Row:
     with _lock:
-        if is_banned(fingerprint, ip):
-            return is_banned(fingerprint, ip)
+        existing = is_banned(None, None, account) if account else is_banned(fingerprint, ip)
+        if existing:
+            return existing
         conn().execute(
-            "INSERT INTO bans (fingerprint,ip,reason,first_seen,banned_at,prior_attacks) VALUES (?,?,?,?,?,?)",
-            (fingerprint, ip, reason, first_seen or now_iso(), now_iso(), prior_attacks))
+            "INSERT INTO bans (fingerprint,ip,reason,first_seen,banned_at,prior_attacks,account) VALUES (?,?,?,?,?,?,?)",
+            (fingerprint, ip, reason, first_seen or now_iso(), now_iso(), prior_attacks, account))
         conn().commit()
-        return is_banned(fingerprint, ip)
+        return is_banned(None, None, account) if account else is_banned(fingerprint, ip)
 
 
-def remove_ban(fingerprint: str | None = None, ip: str | None = None) -> int:
+def remove_ban(fingerprint: str | None = None, ip: str | None = None, account: str | None = None) -> int:
     with _lock:
-        cur = conn().execute("DELETE FROM bans WHERE (?1 IS NOT NULL AND fingerprint=?1) OR (?2 IS NOT NULL AND ip=?2)",
-                             (fingerprint, ip))
+        cur = conn().execute("DELETE FROM bans WHERE (?1 IS NOT NULL AND fingerprint=?1) OR (?2 IS NOT NULL AND ip=?2) "
+                             "OR (?3 IS NOT NULL AND account=?3)", (fingerprint, ip, account))
         conn().commit()
         return cur.rowcount
 

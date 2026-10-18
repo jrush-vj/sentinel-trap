@@ -22,7 +22,7 @@ MATCH_BUDGET_S = 0.05
 CORPUS_MAX_FRACTION = 0.02
 # Nested quantifiers like (a+)+ , (a*)* , (a+)* , grouping followed by a quantifier that wraps a quantifier.
 NESTED_QUANTIFIER = re.compile(r"\([^()]*[+*][^()]*\)\s*[+*{]")
-VALID_CATEGORIES = {"sqli", "prompt_injection", "other"}
+VALID_CATEGORIES = {"sqli", "prompt_injection", "log_injection", "other"}
 
 
 @dataclass

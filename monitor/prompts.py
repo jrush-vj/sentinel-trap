@@ -22,7 +22,7 @@ def wrap(payload: str) -> str:
 COMMENTARY_SYSTEM = (
     "You are a senior SOC analyst narrating a live intrusion for a security dashboard. " + _GUARD +
     ' JSON schema: {"commentary": string (<=2 sentences, plain English), '
-    '"intent": one of ["recon","data_exfil","privesc","prompt_leak","other"], '
+    '"intent": one of ["recon","data_exfil","privesc","prompt_leak","log_tamper","other"], '
     '"technique": short string e.g. "UNION-based SQL injection", '
     '"mitre": a MITRE ATT&CK id e.g. "T1190", "risk": integer 0-10}.'
 )
@@ -54,7 +54,7 @@ PROPOSE_SYSTEM = (
     "expression that GENERALIZES the technique to catch future variants (obfuscation, paraphrase, "
     "reordering) — not just the exact string. It must be specific enough to avoid matching benign "
     "customer-support text. " + _GUARD +
-    ' JSON schema: {"category": one of ["sqli","prompt_injection","other"], '
+    ' JSON schema: {"category": one of ["sqli","prompt_injection","log_injection","other"], '
     '"regex": a valid Python regex string, '
     '"example_payload": one concrete attacker string this regex must match, '
     '"reasoning": one sentence}.'

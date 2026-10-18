@@ -33,6 +33,8 @@ def _real_rows(kind: str) -> list[dict[str, str]]:
     if kind == "prompt":
         return [{"label": "System prompt", "value": "never sent", "meta": "stays inside the real app"},
                 {"label": "Internal API keys", "value": "never sent", "meta": "0 bytes left the app"}]
+    if kind == "logs":
+        return [{"label": "Real activity log", "value": "unchanged", "meta": "forged lines never reached it"}]
     if kind == "empty":
         return [{"label": "Rows changed", "value": "0", "meta": "the real database was never touched"}]
     queries = {
@@ -102,8 +104,9 @@ async def final_report(sessions: list[dict[str, Any]], stats: dict[str, Any], ga
         log.warning("gateway unavailable for report: %s", exc)
         rules, bans = [], []
     banned_fps = {b.get("fingerprint") for b in bans}
-    banned_ips = {b.get("ip") for b in bans}
-    ban_reason = {b.get("fingerprint"): b.get("reason") for b in bans}
+    banned_ips = {b.get("ip") for b in bans if b.get("ip")}
+    banned_accounts = {b.get("account") for b in bans if b.get("account")}
+    ban_reason = {b.get("account") or b.get("fingerprint"): b.get("reason") for b in bans}
 
     reports: dict[str, dict[str, Any]] = {}
     for a in db.recent_analyses(200):  # newest first: keep the latest report per session
@@ -120,13 +123,15 @@ async def final_report(sessions: list[dict[str, Any]], stats: dict[str, Any], ga
                 checks = await gateway("POST", "/admin/rules/check", {"payloads": payloads})
             except Exception as exc:
                 log.info("rule check failed: %s", exc)
-        banned = s["fingerprint"] in banned_fps or s["attacker_ip"] in banned_ips
+        account = s.get("account")
+        banned = (account in banned_accounts) if account else (s["fingerprint"] in banned_fps or s["attacker_ip"] in banned_ips)
         r = reports.get(s["session_id"])
         attackers.append({
             "session_id": s["session_id"], "fingerprint": s["fingerprint"], "attacker_ip": s["attacker_ip"],
+            "account": account,
             "status": s["status"], "started": s["started"], "last": s.get("last"), "actions": s["actions"],
             "risk": s["risk"], "canary": s["canary"], "banned": banned,
-            "ban_reason": ban_reason.get(s["fingerprint"], ""),
+            "ban_reason": ban_reason.get(account or s["fingerprint"], ""),
             "activity": [{k: t.get(k) for k in ("ts", "action", "channel", "payload", "detail")} for t in s["timeline"]],
             "analysis": {k: r.get(k) for k in ("summary", "attacker_goal", "techniques", "iocs",
                                                "recommended_actions", "risk", "source")} if r else None,

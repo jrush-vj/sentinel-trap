@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import secrets
 from pathlib import Path
 from typing import Any
 
@@ -19,9 +20,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
 from honeypot import fakes
-from shared import llm
+from shared import auth, llm
 from shared.events import EventSender, make_event
-from shared.util import env_int
+from shared.util import env_int, now_iso
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s honeypot %(levelname)s %(message)s")
 log = logging.getLogger("honeypot")
@@ -167,6 +168,69 @@ async def internal_keys(request: Request) -> JSONResponse:
     report(ctx(request), "web", "/api/internal/keys", "served fake internal keys with canaries", "canary keys",
            kind="api_keys", sample=[{"name": r["owner"], "email": r["key"]} for r in rows])
     return JSONResponse({"keys": rows})
+
+
+# ---------------------------------------------------------------- accounts + activity log mirrors
+# Same paths and JSON shapes as the app. Cookies minted here carry a random (invalid) signature, so a
+# login inside the honeypot never yields a cookie the real app or the gateway accepts.
+FAKE_LOG = [
+    "2026-10-18T08:59:12.004Z INFO user=ops action=login",
+    "2026-10-18T09:02:47.311Z INFO user=billing-service action=invoice_run status=ok",
+    "2026-10-18T09:15:03.870Z WARN user=ops action=password_reset_requested",
+]
+session_logs: dict[str, list[str]] = {}
+
+
+def honeypot_login(username: str) -> JSONResponse:
+    resp = JSONResponse({"username": username})
+    resp.set_cookie(auth.COOKIE, f"{username}.{secrets.token_hex(16)}", httponly=True, samesite="lax", max_age=7 * 86400)
+    return resp
+
+
+@app.post("/api/signup")
+@app.post("/api/login")
+async def login(request: Request) -> JSONResponse:
+    await jitter()
+    name = str((await request.json()).get("username", "")).strip().lower()
+    report(ctx(request), "web", f"{request.url.path} {name}", "fake login accepted")
+    if not auth.USERNAME_RE.match(name):
+        return JSONResponse({"detail": "Username: 3-20 characters, letters, digits or _."}, status_code=400)
+    return honeypot_login(name)
+
+
+@app.post("/api/logout")
+async def logout() -> JSONResponse:
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(auth.COOKIE)
+    return resp
+
+
+@app.get("/api/me")
+async def me(request: Request) -> JSONResponse:
+    name = auth.claimed_username(request.cookies.get(auth.COOKIE))
+    if not name:
+        return JSONResponse({"detail": "Please sign in."}, status_code=401)
+    return JSONResponse({"username": name})
+
+
+@app.post("/api/feedback")
+async def feedback(request: Request) -> JSONResponse:
+    await jitter()
+    c = ctx(request)
+    name = auth.claimed_username(request.cookies.get(auth.COOKIE)) or "guest"
+    message = str((await request.json()).get("message", ""))[:1000]
+    # Let the forged lines "land" in this attacker's private copy of the log; the real log never sees them.
+    lines = f"{now_iso()} INFO user={name} action=feedback msg={message}".splitlines()
+    session_logs.setdefault(c["session"], []).extend(lines)
+    report(c, "log", message, "forged log lines kept in a fake log", "fake activity log",
+           kind="logs", sample="\n".join(lines)[:300])
+    return JSONResponse({"ok": True})
+
+
+@app.get("/api/logs")
+async def logs(request: Request) -> JSONResponse:
+    await jitter()
+    return JSONResponse({"lines": (FAKE_LOG + session_logs.get(ctx(request)["session"], []))[-15:]})
 
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])

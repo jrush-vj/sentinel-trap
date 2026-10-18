@@ -15,7 +15,7 @@ from monitor import db, report
 from monitor.analyst import Analyst
 from monitor.hub import hub
 from monitor.mock import MockRunner
-from shared import llm
+from shared import auth, llm
 from shared.util import env_int, env_str
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -118,6 +118,7 @@ def build_sessions(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "session_id": sid, "fingerprint": event["fingerprint"], "attacker_ip": event["attacker_ip"],
             "started": event["ts"], "status": "trapped", "actions": 0, "max_actions": MAX_ACTIONS,
             "risk": 0, "canary": False, "rule_ids": [], "timeline": [],
+            "account": sid[5:] if sid.startswith("acct:") else None,
         })
         s["last"] = event["ts"]
         s["risk"] = max(s["risk"], event.get("risk") or 0)
@@ -128,7 +129,8 @@ def build_sessions(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if event["action"] == "canary_hit":
             s["canary"] = True
         if event["action"] in {"session_ended", "banned"}:
-            s["status"] = "banned" if event["action"] == "banned" else "ended"
+            # a ban is followed by session_ended; keep showing "banned"
+            s["status"] = "banned" if event["action"] == "banned" or s["status"] == "banned" else "ended"
         s["timeline"].append({k: event.get(k) for k in ("id", "ts", "action", "channel", "payload", "risk", "detail", "rule_id")})
     for s in sessions.values():
         if marked_safe.get(s["fingerprint"], "") >= s["last"]:  # cleared after its last trap event
@@ -145,16 +147,19 @@ async def api_sessions() -> list[dict[str, Any]]:
 async def api_stats() -> dict[str, Any]:
     counts = db.action_counts()
     gateway_requests = sum(counts.get(a, 0) for a in
-                           ("request", "routed_to_honeypot", "honeypot_interaction", "blocked", "canary_hit"))
+                           ("request", "routed_to_honeypot", "honeypot_interaction", "blocked", "canary_hit",
+                            "attack_stopped"))
     return {
         "requests": gateway_requests,
-        "attacks_detected": sum(counts.get(a, 0) for a in ("routed_to_honeypot", "honeypot_interaction", "canary_hit")),
+        "attacks_detected": sum(counts.get(a, 0) for a in ("routed_to_honeypot", "honeypot_interaction", "canary_hit",
+                                                           "attack_stopped")),
         "attackers_trapped": db.distinct_count("routed_to_honeypot"),
         "attackers_banned": db.distinct_count("banned"),
         "rules_learned": counts.get("rule_learned", 0),
         "false_positives_fixed": counts.get("marked_safe", 0),
         "blocked": counts.get("blocked", 0),
         "learned_catches": counts.get("learned_rule_caught", 0),
+        "attacks_stopped": counts.get("attack_stopped", 0),
         "by_action": counts,
     }
 
@@ -210,6 +215,25 @@ async def api_ban_all() -> dict[str, Any]:
     unfinished = await analyst.wait_for(ended, timeout=45.0)
     final = await api_final_report()
     final.update(ended_now=ended, unfinished=unfinished)
+    await hub.broadcast({"type": "final_report", "generated_at": final["generated_at"], "ended_now": ended})
+    return final
+
+
+@app.post("/api/ban-account", dependencies=[Depends(require_admin)])
+async def api_ban_account(body: dict[str, Any]) -> dict[str, Any]:
+    """Ban one demo account once its attacks are learned, wait for its report, return that report."""
+    account = str(body.get("account", "")).strip().lower()
+    if not auth.USERNAME_RE.match(account):
+        raise HTTPException(status_code=400, detail="invalid account")
+    try:
+        result = await gateway_admin("POST", "/admin/ban-account", {"account": account})
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"gateway unreachable: {exc}") from exc
+    ended = result.get("ended", [])
+    unfinished = await analyst.wait_for(ended, timeout=45.0)
+    sessions = [s for s in build_sessions(db.recent_events(2000)) if s["session_id"] == f"acct:{account}"]
+    final = await report.final_report(sessions, await api_stats(), gateway_admin)
+    final.update(ended_now=ended, unfinished=unfinished, account=account)
     await hub.broadcast({"type": "final_report", "generated_at": final["generated_at"], "ended_now": ended})
     return final
 

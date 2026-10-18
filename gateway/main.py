@@ -1,11 +1,14 @@
 """SENTINEL-TRAP gateway — the only public entry point (:8080).
 
 Decision order for every request (ALL deterministic, no LLM in this path):
-  1. fingerprint = sha256(ip | user-agent | st_session cookie)[:16]
+  1. fingerprint = sha256(ip | user-agent | st_session cookie)[:16]; a valid signed nm_user login
+     cookie makes the identity the account ("acct:<name>") instead of the browser session
   2. canary signature anywhere -> immediate ban + route to honeypot
-  3. banned (fingerprint OR ip) -> plain 403 "Access denied"
+  3. banned (account, else fingerprint OR ip) -> plain 403 "Access denied"
   4. already an active attacker session -> keep them in the honeypot
-  5. rule engine scores the request -> clean proxies to the app, suspicious/malicious -> honeypot
+  5. rule engine scores the request -> clean proxies to the app, suspicious/malicious -> honeypot.
+     A logged-in account whose attack is of a category the system has already LEARNED is stopped
+     with a 403 instead (attack_stopped): not trapped, not banned, the account stays usable.
   6. every decision emits a fire-and-forget event to the monitor
 
 Admin API (Bearer ADMIN_TOKEN, internal network) powers banning, rule proposal/validation,
@@ -14,6 +17,7 @@ mark-safe self-correction, and demo reset.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import logging
 from contextlib import asynccontextmanager
@@ -27,6 +31,7 @@ from gateway.normalize import normalize_variants
 from gateway.proxy import aclose, forward
 from gateway.rules import CANARY_PATTERNS, MALICIOUS_MIN, Rule, RuleEngine
 from gateway.validator import validate
+from shared import auth
 from shared.events import EventSender, make_event
 from shared.util import env_bool, env_int, env_str, fingerprint as make_fp, now_iso
 
@@ -77,6 +82,17 @@ def client_ip(request: Request) -> str:
     return request.client.host if request.client else "0.0.0.0"
 
 
+def bannable_ip(request: Request, ip: str) -> str | None:
+    """The ip to remember in the ban store, or None to ban by fingerprint only. Behind Docker Desktop every
+    browser on the LAN arrives from the same NAT ip, so banning a non-public socket ip would lock out everyone."""
+    if TRUST_XFF and request.headers.get("x-forwarded-for"):
+        return ip
+    try:
+        return ip if ipaddress.ip_address(ip).is_global else None
+    except ValueError:
+        return None
+
+
 def identity(request: Request) -> tuple[str, str, str, str | None]:
     """Return (ip, user_agent, session_id, set_cookie_or_None)."""
     ip = client_ip(request)
@@ -109,6 +125,22 @@ def inspect_fields(request: Request, body: bytes) -> dict[str, str]:
         if h in request.headers:
             fields[f"hdr.{h}"] = request.headers[h]
     return fields
+
+
+def login_target(request: Request, fields: dict[str, str]) -> str | None:
+    """The account a login/signup request is for (unverified: used only to refuse banned accounts)."""
+    if request.url.path not in ("/api/login", "/api/signup"):
+        return None
+    name = fields.get("body.username", "").strip().lower()
+    return name if auth.USERNAME_RE.match(name) else None
+
+
+def channel_of(path: str) -> str:
+    if path.endswith("/api/chat"):
+        return "prompt"
+    if path.endswith("/api/feedback"):
+        return "log"
+    return "web"
 
 
 def has_canary(fields: dict[str, str]) -> bool:
@@ -144,36 +176,50 @@ async def gateway(request: Request, full_path: str) -> Response:
     body = await request.body()
     ip, ua, session, set_cookie = identity(request)
     fp = make_fp(ip, ua, session)
+    bip = bannable_ip(request, ip)
     fields = inspect_fields(request, body)
-    channel = "prompt" if request.url.path.endswith("/api/chat") else "web"
+    account = auth.verify(request.cookies.get(auth.COOKIE))
+    sid = f"acct:{account}" if account else session  # who attacks/bans/learning are tracked against
+    login_name = login_target(request, fields)
+    channel = channel_of(request.url.path)
     payload = summarize_payload(request, fields)
 
     # (2) canary signature -> immediate ban + honeypot
     if has_canary(fields):
-        existing = store.get_attacker(session)
-        store.upsert_attacker(session, fp, ip, honeypot_inc=1, payload=payload, canary=True)
-        commit_ban(fp, ip, "canary hit (token reused / decoy endpoint touched)", session)
-        emit(make_event("canary_hit", session_id=session, fingerprint=fp, attacker_ip=ip, channel=channel,
+        existing = store.get_attacker(sid)
+        store.upsert_attacker(sid, fp, bip, honeypot_inc=1, payload=payload, canary=True)
+        commit_ban(fp, bip, "canary hit (token reused / decoy endpoint touched)", sid)
+        emit(make_event("canary_hit", session_id=sid, fingerprint=fp, attacker_ip=ip, channel=channel,
                         payload=payload, verdict="malicious", risk=10, detail="canary signature in request"))
-        emit(make_event("session_ended", session_id=session, fingerprint=fp, attacker_ip=ip, channel="system",
+        emit(make_event("session_ended", session_id=sid, fingerprint=fp, attacker_ip=ip, channel="system",
                         verdict="malicious", risk=10, detail="canary hit"))
-        resp = await route_to_honeypot(request, body, fp=fp, session=session, ip=ip,
+        resp = await route_to_honeypot(request, body, fp=fp, session=sid, ip=ip,
                                        actions=(existing["honeypot_actions"] if existing else 0) + 1, risk=10, rule_ids=[])
         return with_cookie(resp, set_cookie)
 
     # (3) banned -> plain 403
-    ban = store.is_banned(fp, ip)
+    names = [n for n in (account, login_name) if n]
+    ban = None
+    for name in names:
+        ban = ban or store.is_banned(fp, bip, name)
+    if not names:
+        ban = store.is_banned(fp, bip)
     if ban:
         mins = minutes_since(ban["first_seen"])
-        emit(make_event("blocked", session_id=session, fingerprint=fp, attacker_ip=ip, channel=channel,
-                        payload=payload, verdict="malicious", risk=10, rule_id=None,
-                        detail=f"Known attacker, banned (first seen {mins} min ago, {ban['prior_attacks']} prior attacks)"))
-        return with_cookie(HTMLResponse(DENIED_HTML, status_code=403), set_cookie)
+        who = f"account {ban['account']}" if ban["account"] else "attacker"
+        emit(make_event("blocked", session_id=f"acct:{ban['account']}" if ban["account"] else sid, fingerprint=fp,
+                        attacker_ip=ip, channel=channel, payload=payload, verdict="malicious", risk=10, rule_id=None,
+                        detail=f"Known {who}, banned (first seen {mins} min ago, {ban['prior_attacks']} prior attacks)"))
+        resp = with_cookie(HTMLResponse(DENIED_HTML, status_code=403), set_cookie)
+        if names:
+            resp.delete_cookie(auth.COOKIE)  # signs the banned account out so another account can be used
+        return resp
 
     # (4) already an active (not-ended) attacker -> keep them trapped
-    attacker = store.get_attacker(session)
+    attacker = store.get_attacker(sid)
     if attacker and not attacker["ended"]:
-        return with_cookie(await handle_honeypot_action(request, body, fp, session, ip, payload, channel, attacker), set_cookie)
+        return with_cookie(await handle_honeypot_action(request, body, fp, sid, ip, payload, channel, attacker, fields),
+                           set_cookie)
 
     # (5) rule evaluation
     if store.whitelisted(normalize_variants(payload)):
@@ -183,42 +229,68 @@ async def gateway(request: Request, full_path: str) -> Response:
         verdict = engine.evaluate(fields)
 
     if verdict["verdict"] == "clean":
-        emit(make_event("request", session_id=session, fingerprint=fp, attacker_ip=ip, channel=channel,
+        emit(make_event("request", session_id=sid, fingerprint=fp, attacker_ip=ip, channel=channel,
                         payload=payload, verdict="clean", risk=verdict["score"], detail="proxied to app"))
         resp = await forward(request, APP_URL, body)
         return with_cookie(resp, set_cookie)
 
+    if request.url.path in ("/api/login", "/api/signup"):
+        # never trap a sign-in: the browser's next (real) login would land in the honeypot and stay anonymous
+        return with_cookie(stop_attack(sid, fp, ip, channel, payload, verdict, verdict["matched"],
+                                       "attack on the sign-in form stopped; not trapped"), set_cookie)
+    if account:
+        learned = {r.category for r in engine.all_rules() if r.source == "learned" and r.enabled}
+        known = [r for r in verdict["matched"] if r.category in learned]
+        if known:
+            cat = known[0].category.replace("_", " ")
+            return with_cookie(stop_attack(sid, fp, ip, channel, payload, verdict, known,
+                                           f"known {cat} attack stopped; account {account} not banned"), set_cookie)
+
     # suspicious or malicious -> first detection, silently route to honeypot
-    row = store.upsert_attacker(session, fp, ip, risk_add=verdict["score"], honeypot_inc=1,
+    row = store.upsert_attacker(sid, fp, bip, risk_add=verdict["score"], honeypot_inc=1,
                                 payload=payload, rule_ids=verdict["rule_ids"])
     maybe_mark_eligible(row)
     if verdict.get("learned_only_hit"):
-        emit(make_event("learned_rule_caught", session_id=session, fingerprint=fp, attacker_ip=ip, channel=channel,
+        emit(make_event("learned_rule_caught", session_id=sid, fingerprint=fp, attacker_ip=ip, channel=channel,
                         payload=payload, verdict="malicious", risk=verdict["score"],
                         rule_id=next((r.id for r in verdict["matched"] if r.source == "learned"), None),
                         detail="learned rule caught a variant the built-ins would have missed",
                         extra={"builtin_score": verdict["builtin_score"], "builtin_verdict": verdict["builtin_verdict"]}))
-    emit(make_event("routed_to_honeypot", session_id=session, fingerprint=fp, attacker_ip=ip, channel=channel,
+    emit(make_event("routed_to_honeypot", session_id=sid, fingerprint=fp, attacker_ip=ip, channel=channel,
                     payload=payload, verdict=verdict["verdict"], risk=verdict["score"],
                     rule_id=verdict["rule_ids"][0] if verdict["rule_ids"] else None,
                     detail=f"matched {', '.join(verdict['rule_ids']) or 'rules'} -> rerouted silently",
                     extra={"actions": row["honeypot_actions"], "max_actions": MAX_HONEYPOT_ACTIONS,
                            "category": verdict.get("top_category")}))
-    resp = await route_to_honeypot(request, body, fp=fp, session=session, ip=ip,
+    resp = await route_to_honeypot(request, body, fp=fp, session=sid, ip=ip,
                                    actions=row["honeypot_actions"], risk=row["risk"], rule_ids=verdict["rule_ids"])
     return with_cookie(resp, set_cookie)
 
 
+def stop_attack(sid: str, fp: str, ip: str, channel: str, payload: str,
+                verdict: dict[str, Any], rules: list[Rule], detail: str) -> Response:
+    """Refuse this request only. No trap, no ban."""
+    rule = next((r for r in rules if r.source == "learned"), rules[0])
+    emit(make_event("attack_stopped", session_id=sid, fingerprint=fp, attacker_ip=ip, channel=channel,
+                    payload=payload, verdict=verdict["verdict"], risk=verdict["score"], rule_id=rule.id,
+                    detail=detail, extra={"category": rule.category, "rule_ids": verdict["rule_ids"]}))
+    return JSONResponse({"error": "blocked", "detail": "This request was blocked by NovaMind's security policy."},
+                        status_code=403)
+
+
 async def handle_honeypot_action(request: Request, body: bytes, fp: str, session: str, ip: str,
-                                 payload: str, channel: str, attacker) -> Response:
+                                 payload: str, channel: str, attacker, fields: dict[str, str]) -> Response:
     """Subsequent requests from a trapped attacker: stay in the honeypot, count the action."""
-    row = store.upsert_attacker(session, fp, ip, honeypot_inc=1, payload=payload)
+    row = store.upsert_attacker(session, fp, bannable_ip(request, ip), honeypot_inc=1, payload=payload)
     maybe_mark_eligible(row)
+    category = engine.evaluate(fields)["top_category"]  # tells the analyst which attack type to learn
     emit(make_event("honeypot_interaction", session_id=session, fingerprint=fp, attacker_ip=ip, channel=channel,
                     payload=payload, verdict="malicious", risk=row["risk"],
                     detail="trapped attacker interaction",
-                    extra={"actions": row["honeypot_actions"], "max_actions": MAX_HONEYPOT_ACTIONS}))
-    if row["honeypot_actions"] >= MAX_HONEYPOT_ACTIONS:
+                    extra={"actions": row["honeypot_actions"], "max_actions": MAX_HONEYPOT_ACTIONS,
+                           "category": category}))
+    # account sessions are ended by the operator's Ban button, not by an action limit
+    if row["honeypot_actions"] >= MAX_HONEYPOT_ACTIONS and not session.startswith("acct:"):
         emit(make_event("session_ended", session_id=session, fingerprint=fp, attacker_ip=ip, channel="system",
                         verdict="malicious", risk=row["risk"],
                         detail=f"reached {MAX_HONEYPOT_ACTIONS} honeypot actions"))
@@ -233,15 +305,20 @@ def maybe_mark_eligible(row) -> None:
 
 
 def commit_ban(fp: str, ip: str, reason: str, session: str) -> None:
+    """Account sessions ban only the account; anonymous ones ban fingerprint + ip."""
+    account = session[5:] if session.startswith("acct:") else None
     row = store.get_attacker(session)
     first_seen = row["first_seen"] if row else now_iso()
     prior = row["honeypot_actions"] if row else 0
-    if store.is_banned(fp, ip):
+    if store.is_banned(None, None, account) if account else store.is_banned(fp, ip):
         return
-    store.add_ban(fp, ip, reason, first_seen=first_seen, prior_attacks=prior)
+    if account:
+        store.add_ban(None, None, reason, first_seen=first_seen, prior_attacks=prior, account=account)
+    else:
+        store.add_ban(fp, ip, reason, first_seen=first_seen, prior_attacks=prior)
     store.mark_ended(session)
     emit(make_event("banned", session_id=session, fingerprint=fp, attacker_ip=ip, channel="system",
-                    verdict="malicious", risk=10, detail=f"ban: {reason}"))
+                    verdict="malicious", risk=10, detail=f"ban{' account ' + account if account else ''}: {reason}"))
 
 
 def end_session(row, reason: str) -> None:
@@ -297,6 +374,22 @@ async def admin_ban(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     session = payload.get("session_id", fp or ip)
     commit_ban(fp, ip, reason, session)
     return {"banned": True, "fingerprint": fp, "ip": ip}
+
+
+@app.post("/admin/ban-account", dependencies=[Depends(require_admin)])
+async def admin_ban_account(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Operator action: ban one demo account and end its honeypot session (the monitor then writes the report)."""
+    account = str(payload.get("account", "")).strip().lower()
+    if not auth.USERNAME_RE.match(account):
+        raise HTTPException(status_code=400, detail="invalid account")
+    sid = f"acct:{account}"
+    reason = str(payload.get("reason") or "operator ban after the analyst learned the account's attacks")
+    row = store.get_attacker(sid)
+    if row:
+        end_session(row, reason)
+    else:
+        commit_ban("", "", reason, sid)
+    return {"banned": True, "account": account, "ended": [sid] if row else []}
 
 
 @app.post("/admin/end-all", dependencies=[Depends(require_admin)])
@@ -360,11 +453,17 @@ async def admin_mark_safe(payload: dict[str, Any] = Body(...)) -> dict[str, Any]
     """Self-correction: unban a fingerprint/ip and/or disable a mis-firing rule + whitelist its payload."""
     fp = payload.get("fingerprint")
     ip = payload.get("ip")
+    account = payload.get("account")
     rule_id = payload.get("rule_id")
     example = payload.get("payload") or payload.get("example_payload")
     removed = 0
+    if account:
+        removed += store.remove_ban(account=account)
+        with store._lock:
+            store.conn().execute("DELETE FROM attackers WHERE session_id=?", (f"acct:{account}",))
+            store.conn().commit()
     if fp or ip:
-        removed = store.remove_ban(fp, ip)
+        removed += store.remove_ban(fp, ip)
         if fp:
             # clear the attacker flag so the (now-cleared) session is treated as clean again
             row = None
@@ -382,8 +481,8 @@ async def admin_mark_safe(payload: dict[str, Any] = Body(...)) -> dict[str, Any]
         # also store the squashed variant so obfuscation-normalized matches are whitelisted
         for v in normalize_variants(example):
             store.add_whitelist(v, note="marked safe")
-    emit(make_event("marked_safe", fingerprint=fp or "", attacker_ip=ip or "", channel="system", verdict="clean", risk=0, rule_id=rule_id,
-                    payload=str(example or fp or ip or ""),
+    emit(make_event("marked_safe", session_id=f"acct:{account}" if account else "system", fingerprint=fp or "", attacker_ip=ip or "", channel="system", verdict="clean", risk=0, rule_id=rule_id,
+                    payload=str(example or account or fp or ip or ""),
                     detail=f"false positive corrected (unbanned={removed}, disabled_rule={disabled_rule})"))
     return {"ok": True, "unbanned": removed, "disabled_rule": disabled_rule}
 

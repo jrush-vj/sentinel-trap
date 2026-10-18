@@ -7,6 +7,10 @@ attacker's request path. Every LLM call has a timeout + canned fallback tagged "
 On session_ended the orchestrator: bans the attacker (via the gateway), writes a report, then
 proposes a generalized rule per category and submits it to the gateway for validation+activation.
 If the LLM is down, deterministic fallbacks keep the whole loop working.
+
+Logged-in demo accounts (session_id "acct:<name>") learn LIVE instead: each new attack category is
+learned while the attacker is still trapped. Once every DEMO_CATEGORIES entry is learned, a
+"learning" message with ready=True tells the dashboard to offer the operator a Ban button.
 """
 from __future__ import annotations
 
@@ -25,6 +29,7 @@ log = logging.getLogger("analyst")
 Broadcast = Callable[[dict[str, Any]], Awaitable[None]]
 
 COMMENTARY_ACTIONS = {"routed_to_honeypot", "honeypot_interaction", "canary_hit", "blocked", "learned_rule_caught"}
+DEMO_CATEGORIES = ("sqli", "prompt_injection", "log_injection")
 
 
 class Analyst:
@@ -35,7 +40,8 @@ class Analyst:
         self.queues: dict[str, asyncio.Queue] = {}
         self.workers: dict[str, asyncio.Task] = {}
         self.payloads: dict[str, list[str]] = {}
-        self.categories: dict[str, str] = {}
+        self.categories: dict[str, set[str]] = {}
+        self.learned: dict[str, set[str]] = {}
         self.ended: set[str] = set()
 
     # ---- ingest hook: called by the monitor for every event ----
@@ -47,7 +53,7 @@ class Analyst:
                 self.payloads.setdefault(sid, []).append(event["payload"])
             cat = (event.get("extra") or {}).get("category")
             if cat:
-                self.categories[sid] = cat
+                self.categories.setdefault(sid, set()).add(cat)
             self._enqueue(sid, event)
 
     def _enqueue(self, sid: str, event: dict[str, Any]) -> None:
@@ -65,6 +71,7 @@ class Analyst:
                     await self._on_session_ended(sid, event)
                 elif event["action"] in COMMENTARY_ACTIONS:
                     await self._commentary(sid, event)
+                    await self._learn_live(sid, event)
             except Exception as exc:
                 log.warning("analyst worker error (%s): %s", sid, exc)
             finally:
@@ -85,6 +92,26 @@ class Analyst:
             data = fallbacks.commentary(event["action"], payload, event.get("risk", 6))
         msg = {"type": "analysis", "session_id": sid, "event_id": event.get("id"), "ts": now_iso(), **data}
         db.insert_analysis("commentary", sid, event.get("id"), data["source"], data, msg["ts"])
+        await self.broadcast(msg)
+
+    # ---- live learning for logged-in accounts ----
+    async def _learn_live(self, sid: str, event: dict[str, Any]) -> None:
+        cat = (event.get("extra") or {}).get("category")
+        learned = self.learned.setdefault(sid, set())
+        if not sid.startswith("acct:") or sid in self.ended or cat not in DEMO_CATEGORIES or cat in learned:
+            return
+        await self._learning_state(sid, learning=cat)
+        if await self._propose_rule(sid, cat, self.payloads.get(sid, [])):
+            learned.add(cat)
+        await self._learning_state(sid)
+
+    async def _learning_state(self, sid: str, learning: str | None = None) -> None:
+        learned = self.learned.get(sid, set())
+        msg = {"type": "learning", "session_id": sid, "account": sid[5:], "ts": now_iso(), "learning": learning,
+               "learned": [c for c in DEMO_CATEGORIES if c in learned], "needed": list(DEMO_CATEGORIES),
+               "ready": all(c in learned for c in DEMO_CATEGORIES)}
+        if not learning:  # only settled states are stored, so a reloaded dashboard shows the latest one
+            db.insert_analysis("learning", sid, None, "system", msg, msg["ts"])
         await self.broadcast(msg)
 
     # ---- session end: ban -> report -> learn ----
@@ -116,7 +143,8 @@ class Analyst:
         # 3) learn: propose a generalized rule per category seen, submit for validation
         cats = self._categories_for(sid, payloads)
         for cat in cats:
-            await self._propose_rule(sid, cat, payloads)
+            if cat not in self.learned.get(sid, set()):  # accounts already learned these live
+                await self._propose_rule(sid, cat, payloads)
 
     def _categories_for(self, sid: str, payloads: list[str]) -> list[str]:
         # prompt_injection first: it's the headline learning beat, so its rule should land soonest.
@@ -126,11 +154,10 @@ class Analyst:
             cats.append("prompt_injection")
         if any(k in blob for k in ("union", "select", "or 1=1", "sqlite_master", "drop")):
             cats.append("sqli")
-        if sid in self.categories and self.categories[sid] not in cats:
-            cats.append(self.categories[sid])
+        cats += [c for c in sorted(self.categories.get(sid, ())) if c not in cats]
         return cats or ["other"]
 
-    async def _propose_rule(self, sid: str, category: str, payloads: list[str]) -> None:
+    async def _propose_rule(self, sid: str, category: str, payloads: list[str]) -> bool:
         """Learn a generalized rule for this category.
 
         We always activate the precomputed, well-generalized fallback rule so the self-improvement
@@ -139,7 +166,7 @@ class Analyst:
         valid pattern. Both are real learned rules; the dashboard shows each with source=learned.
         """
         fb = fallbacks.propose(category, payloads)
-        await self._submit_rule(fb)  # guaranteed generalized rule for this category
+        result = await self._submit_rule(fb)  # guaranteed generalized rule for this category
 
         proposal = await llm.chat_json(prompts.PROPOSE_SYSTEM, prompts.propose_user(category, payloads),
                                        max_tokens=200, timeout=10.0)
@@ -147,6 +174,7 @@ class Analyst:
             proposal.setdefault("category", category)
             if proposal["regex"] != fb["regex"]:
                 await self._submit_rule(proposal)  # bonus; rejected narrow/invalid rules are just skipped
+        return bool(result and result.get("accepted"))
 
     async def _submit_rule(self, proposal: dict[str, Any]) -> dict[str, Any] | None:
         return await self._gateway("POST", "/admin/rules/propose", {
@@ -192,4 +220,5 @@ class Analyst:
         self.workers.clear()
         self.payloads.clear()
         self.categories.clear()
+        self.learned.clear()
         self.ended.clear()

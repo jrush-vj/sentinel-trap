@@ -22,15 +22,19 @@ const LABEL = {
   request: "Allowed to app", blocked: "Blocked · 403", routed_to_honeypot: "Sent to honeypot",
   honeypot_interaction: "Honeypot action", canary_hit: "Canary key reused", banned: "Banned",
   session_ended: "Session ended", rule_learned: "Rule learned", rule_rejected: "Rule rejected",
-  marked_safe: "Marked safe", learned_rule_caught: "Learned rule caught it",
+  marked_safe: "Marked safe", learned_rule_caught: "Learned rule caught it", attack_stopped: "Stopped · already learned",
 };
-const CHANNEL = { web: "web", prompt: "chat", shell: "shell", system: "system" };
+const CHANNEL = { web: "web", prompt: "chat", log: "log", shell: "shell", system: "system" };
+const CAT = { sqli: "SQL injection", prompt_injection: "Prompt injection", log_injection: "Log injection" };
+/* logged-in demo accounts use session ids like "acct:user1" */
+const acct = (sid) => (sid && sid.startsWith("acct:") ? sid.slice(5) : null);
+const whoOf = (x) => (acct(x.session_id) ? `user ${acct(x.session_id)}` : x.attacker_ip || "");
 function evClass(ev) {
   switch (ev.action) {
     case "request": case "marked_safe": return "ok";
     case "routed_to_honeypot": case "honeypot_interaction": return "trap";
     case "canary_hit": case "banned": case "blocked": return "bad";
-    case "rule_learned": case "learned_rule_caught": return "learn";
+    case "rule_learned": case "learned_rule_caught": case "attack_stopped": return "learn";
     default: return "sys";
   }
 }
@@ -182,6 +186,9 @@ const Flow = (() => {
         break;
       case "learned_rule_caught":
         pulse("gw", C.learn); tag("gw", "learned rule caught it", C.learn);
+        break;
+      case "attack_stopped":
+        send(["ug"], C.learn, () => { pulse("gw", C.learn); stamp("gw", "STOPPED", C.learn); tag("gw", cat ? `known ${cat} · not banned` : "known attack", C.learn); send([{ e: "ug", rev: true }], C.learn); });
         break;
       case "rule_learned":
         pulse("gw", C.learn); tag("gw", "new rule active", C.learn);
@@ -382,7 +389,7 @@ let lastLearnedCatch = null;
 function addFeed(ev, live) {
   const li = document.createElement("li");
   li.className = "ev " + evClass(ev) + (live ? " new" : "");
-  const who = ev.attacker_ip ? `${esc(ev.attacker_ip)} · ` : "";
+  const who = whoOf(ev) ? `${esc(whoOf(ev))} · ` : "";
   li.innerHTML = `<div><div class="ev-top"><span>${esc(LABEL[ev.action] || ev.action)}</span><time>${time(ev.ts)}</time></div>
     ${ev.payload ? `<div class="pl">${esc(readable(ev.payload))}</div>` : ""}
     <div class="meta">${who}${CHANNEL[ev.channel] || ev.channel} · risk ${ev.risk ?? 0}${ev.rule_id ? " · " + esc(ev.rule_id) : ""}${ev.detail ? " · " + esc(ev.detail) : ""}</div></div>`;
@@ -393,7 +400,10 @@ function addFeed(ev, live) {
   if (ev.action === "learned_rule_caught") { lastLearnedCatch = ev.rule_id; setBeforeAfter(); }
   if (live) {
     Flow.event(ev);
-    if (ev.action === "canary_hit") banner("bad", "Canary key reused", `${ev.attacker_ip || "Attacker"} used a planted fake key. Banned instantly.`);
+    const cat = CAT[(ev.extra || {}).category];
+    if (cat && ["routed_to_honeypot", "honeypot_interaction"].includes(ev.action)) banner("bad", `${cat} detected`, `${whoOf(ev) || "Attacker"} is trapped in the honeypot. The analyst is learning it.`);
+    else if (ev.action === "attack_stopped") banner("", `Known ${cat || "attack"} stopped`, `${whoOf(ev)} was blocked by learned rule ${ev.rule_id || ""}. Account not banned.`);
+    else if (ev.action === "canary_hit") banner("bad", "Canary key reused", `${ev.attacker_ip || "Attacker"} used a planted fake key. Banned instantly.`);
     else if (ev.action === "learned_rule_caught") banner("", "Learned rule caught a new attack", `Built-in rules missed this one. ${ev.rule_id || "A learned rule"} stopped it.`);
     else if (ev.action === "marked_safe") banner("ok", "False positive fixed", "The visitor is cleared and their request is allowed from now on.");
     else if (ev.action === "rule_learned") banner("", "New rule learned", ev.detail || ev.rule_id || "");
@@ -403,7 +413,7 @@ function addFeed(ev, live) {
 function readable(p) { try { return decodeURIComponent(String(p).replace(/\+/g, " ")); } catch (e) { return p; } }
 function updateSplit(ev) {
   if (ev.action === "request") $("split-legit").textContent = readable(ev.payload) || "—";
-  else if (["routed_to_honeypot", "honeypot_interaction", "canary_hit", "blocked"].includes(ev.action))
+  else if (["routed_to_honeypot", "honeypot_interaction", "canary_hit", "blocked", "attack_stopped"].includes(ev.action))
     $("split-attacker").textContent = readable(ev.payload) || LABEL[ev.action];
 }
 document.querySelectorAll(".seg button").forEach((b) => (b.onclick = () => {
@@ -442,6 +452,7 @@ async function refreshSessions() {
     const trapped = sessions.filter((s) => s.status === "trapped").length;
     $("hp-count").textContent = `${trapped} trapped · ${sessions.length} total`;
     box.innerHTML = sessions.map(sessionCard).join("");
+    renderLearning();
     sessions.forEach((s) => {
       if (prevStatus[s.session_id] && prevStatus[s.session_id] !== s.status && s.status === "banned") {
         const el = box.querySelector(`[data-sid="${CSS.escape(s.session_id)}"]`); if (el) el.classList.add("flash");
@@ -452,16 +463,16 @@ async function refreshSessions() {
 }
 function sessionCard(s) {
   const badge = { trapped: "Trapped", banned: "Banned", ended: "Ended", safe: "Marked safe" }[s.status] || s.status;
-  const pct = Math.min(100, Math.round((s.actions / (s.max_actions || 8)) * 100));
+  const pct = s.account ? 0 : Math.min(100, Math.round((s.actions / (s.max_actions || 8)) * 100));
   const tl = s.timeline.slice(-5).reverse().map((t) => {
     const [k, cls] = TL_KIND[t.action] || [t.action, ""];
     return `<li><span class="k ${cls}">${esc(k)}</span><code>${esc(readable(t.payload) || t.detail || LABEL[t.action] || t.action)}</code></li>`;
   }).join("");
   const canMark = s.status !== "safe";
   return `<article class="scard ${esc(s.status)}" data-sid="${esc(s.session_id)}">
-    <div class="scard-head"><span class="scard-id">${esc(s.attacker_ip)} <span>· ${esc(s.fingerprint)}</span></span>
+    <div class="scard-head"><span class="scard-id">${s.account ? `user ${esc(s.account)}` : esc(s.attacker_ip)} <span>· ${esc(s.account ? s.attacker_ip : s.fingerprint)}</span></span>
       ${s.canary ? '<span class="tag bad">canary</span>' : ""}<span class="badge ${esc(s.status)}">${badge}</span></div>
-    <div class="meter"><span>${s.actions}/${s.max_actions} actions before ejection</span><span class="bar"><i style="width:${pct}%"></i></span><span>risk ${s.risk}</span></div>
+    <div class="meter"><span>${s.account ? `${s.actions} actions · waiting for your ban` : `${s.actions}/${s.max_actions} actions before ejection`}</span><span class="bar"><i style="width:${pct}%"></i></span><span>risk ${s.risk}</span></div>
     <ul class="timeline">${tl}</ul>
     ${canMark ? `<div class="scard-actions"><button class="link-btn mark-session" type="button" data-sid="${esc(s.session_id)}">Mark as safe</button></div>` : ""}
   </article>`;
@@ -515,7 +526,7 @@ function list(label, arr) {
 }
 
 /* ================================================================ real vs fake */
-const KIND = { customers: "customers", api_keys: "API keys", secrets: "secrets", schema: "schema", prompt: "chat leak", empty: "write query" };
+const KIND = { customers: "customers", api_keys: "API keys", secrets: "secrets", schema: "schema", prompt: "chat leak", empty: "write query", logs: "activity log" };
 let cxItems = [];
 let cxPinned = null;
 async function refreshContrast() {
@@ -550,8 +561,8 @@ let knownLearned = null;
 async function refreshMemory() {
   try {
     const [bans, rules] = await Promise.all([api("/api/bans"), api("/api/rules")]);
-    $("bans-body").innerHTML = bans.map((b) => `<li><span class="who">${esc(b.ip || "")} · ${esc(b.fingerprint || "")}</span>
-        <button class="link-btn mark-safe" type="button" data-fp="${esc(b.fingerprint || "")}" data-ip="${esc(b.ip || "")}">Mark safe</button>
+    $("bans-body").innerHTML = bans.map((b) => `<li><span class="who">${b.account ? `user ${esc(b.account)}` : `${esc(b.ip || "")} · ${esc(b.fingerprint || "")}`}</span>
+        <button class="link-btn mark-safe" type="button" data-fp="${esc(b.fingerprint || "")}" data-ip="${esc(b.ip || "")}" data-account="${esc(b.account || "")}">Mark safe</button>
         <span class="why">${esc(b.reason || "")}</span></li>`).join("")
       || '<li class="muted">No bans yet.</li>';
     const learned = rules.filter((r) => r.source === "learned");
@@ -593,8 +604,9 @@ function confirmBox({ title, body, yes, alt, danger }) {
 document.addEventListener("click", async (e) => {
   const ms = e.target.closest(".mark-safe");
   if (ms) {
-    const ok = await confirmBox({ title: "Unban this visitor?", body: `<p><code>${esc(ms.dataset.ip)} · ${esc(ms.dataset.fp)}</code> will be able to reach the app again.</p>`, yes: "Unban" });
-    if (ok) await markSafe({ fingerprint: ms.dataset.fp, ip: ms.dataset.ip }, "Visitor unbanned");
+    const a = ms.dataset.account;
+    const ok = await confirmBox({ title: "Unban this visitor?", body: `<p><code>${a ? `user ${esc(a)}` : `${esc(ms.dataset.ip)} · ${esc(ms.dataset.fp)}`}</code> will be able to reach the app again.</p>`, yes: "Unban" });
+    if (ok) await markSafe(a ? { account: a } : { fingerprint: ms.dataset.fp, ip: ms.dataset.ip }, "Visitor unbanned");
   }
   const mss = e.target.closest(".mark-session");
   if (mss) {
@@ -605,7 +617,7 @@ document.addEventListener("click", async (e) => {
     const ok = await confirmBox({
       title: "Mark this visitor as safe?",
       body: `<p>Use this when a normal user was trapped by mistake.</p>
-        <ul><li>Clears <code>${esc(s.attacker_ip)}</code> and lifts any ban</li>
+        <ul><li>Clears <code>${esc(s.account ? "user " + s.account : s.attacker_ip)}</code> and lifts any ban</li>
         <li>Allows this exact request from now on: <code>${esc(first.payload || "")}</code></li>
         </ul>
         ${rule ? `<label class="row"><input type="checkbox" id="ms-rule" /> Also turn off rule <code>${esc(rule)}</code>, which flagged it (only if the rule itself is too eager)</label>` : ""}`,
@@ -613,7 +625,9 @@ document.addEventListener("click", async (e) => {
     });
     if (!ok) return;
     const ruleOff = rule && $("ms-rule") && $("ms-rule").checked;
-    await markSafe({ fingerprint: s.fingerprint, ip: s.attacker_ip, rule_id: ruleOff ? rule : undefined, payload: first.payload },
+    // accounts share the LAN ip with everyone else, so never clear by ip for them
+    const id = s.account ? { account: s.account, fingerprint: s.fingerprint } : { fingerprint: s.fingerprint, ip: s.attacker_ip };
+    await markSafe({ ...id, rule_id: ruleOff ? rule : undefined, payload: first.payload },
       ruleOff ? "Marked safe: visitor cleared, rule turned off" : "Marked safe: visitor cleared");
   }
   const tg = e.target.closest(".switch");
@@ -693,9 +707,67 @@ function clearUI() {
   feed.innerHTML = ""; stream.innerHTML = ""; $("report-card").classList.add("hidden");
   $("feed-empty").classList.remove("hidden");
   $("split-legit").textContent = "—"; $("split-attacker").textContent = "—";
-  lastLearnedCatch = null; knownLearned = null; cxPinned = null;
+  lastLearnedCatch = null; knownLearned = null; cxPinned = null; learnState = null; renderLearning();
   Flow.clear(); refreshAll(); refreshContrast();
 }
+
+/* ================================================================ live learning -> ban one account */
+let learnState = null;
+function renderLearning() {
+  const box = $("learn-alert");
+  const st = learnState;
+  if (!st) { box.className = "learn-alert hidden"; box.innerHTML = ""; return; }
+  const s = sessionsCache.find((x) => x.session_id === st.session_id);
+  const banned = s && s.status === "banned";
+  const steps = st.needed.map((c) => `<li class="${st.learned.includes(c) ? "done" : st.learning === c ? "run" : ""}">${esc(CAT[c] || c)}${st.learned.includes(c) ? " ✓" : st.learning === c ? " · learning…" : ""}</li>`).join("");
+  let text, action = "";
+  if (banned) {
+    text = `<b>user ${esc(st.account)} is banned.</b> All three attacks are learned: another account trying them is stopped without a ban.`;
+    action = `<button class="btn" type="button" id="la-report">View report</button>`;
+  } else if (st.ready) {
+    text = `<b>Attacks learnt from user ${esc(st.account)}.</b> The analyst learned SQL, prompt and log injection. Proceed to ban the user.`;
+    action = `<button class="btn danger" type="button" id="la-ban">Ban user ${esc(st.account)}</button>`;
+  } else {
+    text = `<b>AI is learning from user ${esc(st.account)}</b> while they stay trapped in the honeypot.`;
+  }
+  box.className = "learn-alert" + (banned ? " done" : st.ready ? " ready" : "");
+  box.innerHTML = `<span class="la-text">${text}</span><ol class="learn-steps" aria-label="Attack types learned">${steps}</ol>${action}`;
+}
+function setLearning(m) {
+  if (learnState && learnState.session_id === m.session_id && !m.learning && learnState.ready && !m.ready) return;
+  learnState = m;
+  renderLearning();
+}
+$("learn-alert").addEventListener("click", async (e) => {
+  if (e.target.id === "la-report" && lastReport) { renderFinal(lastReport); $("report-modal").showModal(); return; }
+  if (e.target.id !== "la-ban" || !learnState) return;
+  const account = learnState.account;
+  const ok = await confirmBox({
+    title: `Ban user ${account}?`,
+    body: `<p><code>user ${esc(account)}</code> is ejected from the honeypot and can never sign in again.</p>
+      <p>The analyst writes the incident report. Other accounts keep working: a new account trying the same attacks is stopped, not banned.</p>`,
+    yes: `Ban user ${account} & show report`, danger: true,
+  });
+  if (!ok) return;
+  Object.assign(op, { active: true, expect: 1, banned: 0, reports: 0 });
+  $("fr-body").innerHTML = "";
+  $("fr-sub").textContent = "Working…";
+  $("fr-download").disabled = $("fr-print").disabled = true;
+  setSteps(0);
+  $("report-modal").showModal();
+  try {
+    const r = await api("/api/ban-account", { method: "POST", headers: adminHeaders(), body: JSON.stringify({ account }) });
+    op.active = false;
+    setSteps(-1);
+    lastReport = r;
+    renderFinal(r);
+    refreshAll();
+  } catch (err) {
+    op.active = false;
+    $("fr-steps").innerHTML = "";
+    $("fr-sub").textContent = err && err.status === 401 ? "The admin token was rejected. Set it in AI analyst settings and try again." : "Couldn't reach the gateway. Is it running?";
+  }
+});
 
 /* ================================================================ ban all + final report */
 let lastReport = null;
@@ -769,17 +841,17 @@ function renderFinal(r) {
   $("fr-sub").textContent = `Generated ${new Date(r.generated_at).toLocaleString()}${ended ? ` · ${ended} attacker${ended > 1 ? "s" : ""} ejected and banned just now` : ""}`;
   $("fr-download").disabled = $("fr-print").disabled = false;
   const kpi = (v, l) => `<div><b>${v}</b><span>${l}</span></div>`;
-  const actK = { request: "allowed", routed_to_honeypot: "trapped", honeypot_interaction: "action", canary_hit: "canary", banned: "banned", session_ended: "ended", blocked: "403" };
+  const actK = { request: "allowed", routed_to_honeypot: "trapped", honeypot_interaction: "action", canary_hit: "canary", banned: "banned", session_ended: "ended", blocked: "403", attack_stopped: "stopped" };
   const att = (a) => {
     const rc = a.return_check;
     const allCaught = rc.payloads_checked > 0 && rc.caught === rc.payloads_checked;
     const verdict = a.banned
-      ? `<div class="fr-verdict ok"><b>If they come back: stopped.</b>Their fingerprint and IP are banned, so any request gets a 403.
-          ${rc.payloads_checked ? `${rc.caught} of ${rc.payloads_checked} of their attack requests are also caught by the rules${rc.learned_rule_ids.length ? `, including learned rules ${rc.learned_rule_ids.map((x) => `<code>${esc(x)}</code>`).join(", ")}` : ""}, so a new identity sending the same attack goes straight back to the honeypot.` : ""}</div>`
+      ? `<div class="fr-verdict ok"><b>If they come back: stopped.</b>${a.account ? `Account <code>${esc(a.account)}</code> is banned: it can never sign in or send a request again.` : "Their fingerprint and IP are banned, so any request gets a 403."}
+          ${rc.payloads_checked ? `${rc.caught} of ${rc.payloads_checked} of their attack requests are also caught by the rules${rc.learned_rule_ids.length ? `, including learned rules ${rc.learned_rule_ids.map((x) => `<code>${esc(x)}</code>`).join(", ")}` : ""}, ${a.account ? ", so a new account sending the same attack is stopped without a ban." : ", so a new identity sending the same attack goes straight back to the honeypot."}` : ""}</div>`
       : `<div class="fr-verdict warn"><b>Not banned.</b>${rc.payloads_checked ? `${rc.caught} of ${rc.payloads_checked} of their requests would be caught by the rules.` : ""}</div>`;
     const an = a.analysis;
     return `<article class="fr-att">
-      <div class="fr-att-head"><span class="who">${esc(a.attacker_ip)}</span><span class="muted mono">${esc(a.fingerprint)}</span>
+      <div class="fr-att-head"><span class="who">${a.account ? `user ${esc(a.account)}` : esc(a.attacker_ip)}</span><span class="muted mono">${esc(a.account ? a.attacker_ip : a.fingerprint)}</span>
         <span class="badge ${esc(a.status)}">${esc(a.status)}</span>${a.canary ? '<span class="tag bad">reused a canary key</span>' : ""}
         <span class="muted">${a.actions} honeypot actions · risk ${a.risk}</span></div>
       <div class="fr-att-grid">
@@ -823,6 +895,7 @@ function connectWS() {
       scheduleRefresh(m.event.action === "honeypot_interaction");
     } else if (m.type === "analysis") addCommentary(m);
     else if (m.type === "report") { showReport(m); if (op.active) { op.reports++; opProgress(); } }
+    else if (m.type === "learning") setLearning(m);
     else if (m.type === "llm") refreshLLM();
     else if (m.type === "reset") clearUI();
     else if (m.type === "final_report" && !$("report-modal").open) toast("A final report was generated");
@@ -846,6 +919,7 @@ async function loadAnalyses() {
   items.reverse().forEach((a) => { // oldest first so the newest ends up on top
     if (a.kind === "commentary") addCommentary(a, true);
     else if (a.kind === "report") showReport(a);
+    else if (a.kind === "learning") setLearning(a);
   });
 }
 (async function boot() {
