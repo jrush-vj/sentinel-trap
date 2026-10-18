@@ -163,6 +163,12 @@ def whitelisted(variants: list[str]) -> bool:
     return any(v in wl for v in variants)
 
 
+def open_sessions() -> list[sqlite3.Row]:
+    """Trapped attackers whose honeypot session has not ended yet."""
+    with _lock:
+        return conn().execute("SELECT * FROM attackers WHERE ended=0").fetchall()
+
+
 def reset() -> None:
     with _lock:
         for t in ("attackers", "bans", "whitelist"):

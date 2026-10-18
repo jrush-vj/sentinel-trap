@@ -62,29 +62,34 @@ def fake_customer_response(raw_payload: str) -> dict:
     """Return a payload-dependent fake result set that looks like a successful injection."""
     p = raw_payload.lower()
     served = "normal lookup"
+    kind = "customers"  # which real table this fake stands in for
     rows: list[dict]
 
     if "sqlite_master" in p or "information_schema" in p:
         rows = _fake_schema_rows()
         served = "schema dump (fake table names)"
+        kind = "schema"
     elif "union" in p and ("api_key" in p or "key" in p or "password" in p or "secret" in p):
         rows = FAKE_CUSTOMERS[:3] + _fake_api_key_rows() + _fake_secret_rows()
         served = "UNION leak: fake api_keys + secrets with canaries"
+        kind = "secrets"
     elif "union" in p:
         rows = FAKE_CUSTOMERS + _fake_api_key_rows()
         served = "UNION: extra fake rows + canary keys"
+        kind = "api_keys"
     elif _is_tautology(p):
         rows = FAKE_CUSTOMERS
         served = "tautology: full fake customer dump"
     elif ";" in p and any(k in p for k in ("drop", "delete", "update", "insert")):
         rows = []
         served = "stacked query: fake success (0 rows affected shown as empty)"
+        kind = "empty"
     else:
         # plausible partial match so even odd payloads look like they ran
         term = "".join(c for c in raw_payload if c.isalnum())[:12]
         rows = [c for c in FAKE_CUSTOMERS if term.lower() in c["name"].lower()] or FAKE_CUSTOMERS[:2]
         served = "generic fake match"
-    return {"results": rows, "count": len(rows), "_served": served}
+    return {"results": rows, "count": len(rows), "_served": served, "_kind": kind}
 
 
 # Canned fake "jailbreak success" leaks for /api/chat when the LLM is unavailable.

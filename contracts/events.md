@@ -45,6 +45,6 @@ Senders do not wait for this call to succeed. The gateway buffers up to 500 even
 
 ## Optional extension fields
 Receivers must ignore unknown fields. The monitor uses these when they are present:
-- `extra` (object): structured data, e.g. `{"actions": 3, "max_actions": 8}` on honeypot events, the full rule on `rule_learned`, or `{"builtin_score": 0, "builtin_verdict": "clean"}` on `learned_rule_caught`.
+- `extra` (object): structured data, e.g. `{"actions": 3, "max_actions": 8}` on honeypot events (plus `kind` = the real table the fake data imitates and `sample` = a few of the fake values served, for the dashboard's real-vs-fake panel), the full rule on `rule_learned`, or `{"builtin_score": 0, "builtin_verdict": "clean"}` on `learned_rule_caught`.
 
 The monitor also broadcasts its own analyst messages on `WS /ws`, using `{"type": "analysis" | "report" | "stats", ...}`. These are kept separate from events and are not stored as events.
